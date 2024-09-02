@@ -1,0 +1,25 @@
+cron: "0 1 * * *"
+archive_base_name: backup
+out_dir: ./backup/
+files:
+  - type: sqlite
+    src: /var/lib/vaultwarden/db.sqlite3
+    dst: db.sqlite3
+  - type: glob
+    src_dir: /var/lib/vaultwarden/
+    globset:
+      - sends/**/*
+      - attachments/**/*
+      - rsa_key*
+      - icon_cache/**/*
+encryptor:
+  encryptor_type: age
+  secret_type: passphrase
+  passphrase: 'password'
+compressor:
+  compressor_type: xz
+retention:
+  default_retention: 0s
+  daily_retention: 3day
+  monthly_retention: 3month
+  yearly_retention: 3year
