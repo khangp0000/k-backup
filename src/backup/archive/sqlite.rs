@@ -1,6 +1,6 @@
 use crate::backup::archive::{ArchiveEntry, ArchiveEntryIterable};
 use crate::backup::result_error::result::Result;
-use rusqlite::{Connection, DatabaseName, OpenFlags};
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -47,8 +47,7 @@ impl ArchiveEntryIterable for SqliteDBSource {
         
         // Use SQLite's backup API to create consistent snapshot
         tracing::debug!("Creating SQLite backup from {:?} to {:?}", self.src, temp_file_path);
-        conn.backup(DatabaseName::Main, &temp_file_path, None)?;
-        conn.backup(DatabaseName::Main, &temp_file_path, None)?;
+        conn.backup(rusqlite::MAIN_DB, &temp_file_path, None)?;
         
         let file_size = std::fs::metadata(&temp_file_path)
             .map(|m| m.len())
