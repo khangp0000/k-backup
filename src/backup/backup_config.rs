@@ -25,21 +25,72 @@ use std::sync::{Arc, OnceLock};
 use tracing::{info, warn};
 use validator::{Validate, ValidationError};
 
+/// Main configuration structure for the backup system
+/// 
+/// This struct defines all aspects of backup behavior including:
+/// - When backups run (cron schedule)
+/// - What gets backed up (files/directories)
+/// - How backups are processed (compression, encryption)
+/// - Where backups are stored and how they're named
+/// - How long backups are retained
 #[skip_serializing_none]
 #[derive(Clone, Serialize, Deserialize, Debug, Validate)]
 pub struct BackupConfig {
+    /// Cron expression defining backup schedule
+    /// 
+    /// Examples:
+    /// - "0 1 * * *" = Daily at 1:00 AM UTC
+    /// - "0 */6 * * *" = Every 6 hours
+    /// - "0 2 * * 0" = Weekly on Sunday at 2:00 AM UTC
     #[validate(custom(function = validate_cron_str))]
     pub cron: Arc<str>,
+    
+    /// Base name for backup archive files
+    /// 
+    /// Final filename format: {archive_base_name}.{timestamp}.{extensions}
+    /// Example: "backup" → "backup.2025-11-20T15h39m11s+0000.tar.xz.age"
     #[validate(custom(function = validate_valid_archive_base_name))]
     pub archive_base_name: Arc<str>,
+    
+    /// Directory where backup files will be created
+    /// 
+    /// Must be writable by the backup process.
+    /// Used for both temporary files during creation and final backup storage.
     #[validate(custom(function = validate_out_dir))]
     pub out_dir: Arc<Path>,
+    
+    /// List of files and directories to include in backups
+    /// 
+    /// Supports multiple source types:
+    /// - SQLite databases (with proper backup API)
+    /// - File/directory patterns (with glob matching)
     pub files: Arc<Vec<ArchiveEntryConfig>>,
+    
+    /// Compression configuration
+    /// 
+    /// Defines how backup archives are compressed before encryption.
+    /// Currently supports XZ (LZMA) compression with configurable levels.
     pub compressor: Arc<CompressorConfig>,
+    
+    /// Encryption configuration
+    /// 
+    /// Defines how backup archives are encrypted after compression.
+    /// Currently supports Age encryption with passphrase or key files.
     pub encryptor: Arc<EncryptorConfig>,
+    
+    /// Optional retention policy for automatic cleanup
+    /// 
+    /// If specified, old backups are automatically deleted based on:
+    /// - Default retention period for all backups
+    /// - Special retention for daily/monthly/yearly backups
+    /// If None, no automatic cleanup is performed.
     pub retention: Option<Arc<RetentionConfig>>,
 }
 
+/// Validates that the cron expression is syntactically correct
+/// 
+/// Uses the cron_parser crate to verify the expression can be parsed
+/// and will generate valid future timestamps.
 fn validate_cron_str(cron: &Arc<str>) -> std::result::Result<(), ValidationError> {
     if cron_parser::parse(cron.as_ref(), &Utc::now()).is_err() {
         return Err(ValidationError::new("InvalidCron")
@@ -91,7 +142,17 @@ fn validate_valid_archive_base_name(name: &Arc<str>) -> Result<(), ValidationErr
     Ok(())
 }
 
+/// Timestamp format used in backup filenames
+/// 
+/// Format: YYYY-MM-DDTHH:MM:SS+TIMEZONE
+/// Example: "2025-11-20T15h39m11s+0000"
+/// 
+/// The '+' in timezone is replaced with '_' to avoid filesystem issues
+/// on systems that don't handle '+' well in filenames.
 static TIME_FORMAT: &str = "%Y-%m-%dT%Hh%Mm%Ss%z";
+
+/// Cached file extension for TAR archives
+/// Built dynamically based on compression and encryption settings
 static TAR_FILE_EXT: OnceLock<Arc<str>> = OnceLock::new();
 
 impl FileExtProvider for BackupConfig {
@@ -107,6 +168,10 @@ impl FileExtProvider for BackupConfig {
 }
 
 impl BackupConfig {
+    /// Generates a timestamp-based file extension for backup files
+    /// 
+    /// Creates a string like "2025-11-20T15h39m11s_0000.tar.xz.age"
+    /// The '+' in timezone offset is replaced with '_' for filesystem compatibility.
     fn time_file_ext<O: Display, T: TimeZone<Offset = O>>(&self, dt: DateTime<T>) -> Arc<str> {
         format!(
             "{}.{}",
@@ -116,6 +181,12 @@ impl BackupConfig {
         .into()
     }
 
+    /// Extracts timestamp from a backup filename
+    /// 
+    /// Parses filenames created by time_file_ext() back into DateTime objects.
+    /// Used for retention management to determine backup age.
+    /// 
+    /// Returns None if the filename doesn't match expected format.
     pub fn get_date_time_from_file_path<P: AsRef<Path>>(
         &self,
         file_path: P,
@@ -249,7 +320,21 @@ impl BackupConfig {
         }
     }
 
+    /// Main daemon loop that runs backups on schedule
+    /// 
+    /// This function:
+    /// 1. Scans existing backup files to build retention state
+    /// 2. Calculates next backup time based on cron schedule
+    /// 3. Sleeps until backup time arrives
+    /// 4. Runs retention cleanup (deletes old backups)
+    /// 5. Creates new backup
+    /// 6. Repeats forever
+    /// 
+    /// The loop never exits normally - any error causes the process to terminate.
+    /// Uses the provided thread pool for parallel operations during backup creation.
     pub fn start_loop(&self, pre_process_pool: Arc<ThreadPool>) -> Result<()> {
+        // Build initial set of existing backup files for retention management
+        // Each file is parsed to extract its creation timestamp
         let mut set: HashSet<_> = read_dir(&self.out_dir)?
             .into_iter()
             .filter_map(|r| r.ok())
@@ -260,20 +345,28 @@ impl BackupConfig {
             .map(Rc::new)
             .collect();
 
+        // Find the most recent backup timestamp to calculate next backup time
+        // If no backups exist, start from Unix epoch
         let start = set
             .iter()
             .map(|i| i.date_time.clone())
             .sorted_unstable()
             .last()
             .unwrap_or(DateTime::UNIX_EPOCH.to_utc().into());
+            
         let cron = self.cron.as_ref();
+        // Calculate next backup time based on cron schedule
         let mut start = cron_parser::parse(cron, start.as_ref()).unwrap();
+        
         loop {
             let now = Utc::now();
+            
+            // Sleep until it's time for the next backup
             if now < start {
                 info!("Sleeping until {start}");
                 std::thread::sleep((start - now).to_std().unwrap())
             } else {
+                // Run retention cleanup before creating new backup
                 if let Some(retention) = &self.retention {
                     retention
                         .get_delete(set.iter().cloned(), now)
@@ -281,20 +374,29 @@ impl BackupConfig {
                             info!("Removing out of retention file {:?}", &to_delete.item);
                             let removed = set.remove(&to_delete);
                             if !removed {
+                                // FIXME: This panic will crash the daemon
+                                // Should log error and continue instead
                                 panic!("Remove item in memory {:?} failed", &to_delete.item);
                             }
+                            // FIXME: Ignoring file deletion errors could lead to disk space issues
                             let _ = std::fs::remove_file(&to_delete.item);
                         });
                 }
+                
                 info!("Trying to create backup...");
-
+                // Create the actual backup archive
                 let (file_path, non_fatal_error) =
                     self.create_archive(now, pre_process_pool.clone())?;
                 info!("Created backup file: {:?}", &file_path);
+                
                 if let Some(non_fatal_error) = non_fatal_error {
                     warn!("Received non fatal error: {non_fatal_error}")
                 }
+                
+                // Add new backup to retention tracking
                 set.insert(Rc::new(ItemWithDateTime::from((file_path, now))));
+                
+                // Calculate next backup time
                 start = cron_parser::parse(cron, &now).unwrap();
             }
         }
