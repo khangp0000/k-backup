@@ -61,6 +61,8 @@ impl<W: Write> CompressorBuilder<W> for XzConfig {
                 .unwrap_or(1)
         });
         
+        tracing::debug!("Creating XZ compressor with level={}, threads={}", level, thread);
+        
         if thread == 1 {
             // Single-threaded compression (less memory usage)
             Ok(XzEncoder::new(writer, level).into())
@@ -73,5 +75,107 @@ impl<W: Write> CompressorBuilder<W> for XzConfig {
                 .encoder()?;
             Ok(XzEncoder::new_stream(writer, stream).into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_xz_config_default() {
+        let config = XzConfig::default();
+        assert!(config.level.is_none());
+        assert!(config.thread.is_none());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_xz_config_validation() {
+        // Valid configurations
+        let valid_configs = vec![
+            XzConfig { level: Some(0), thread: Some(1) },
+            XzConfig { level: Some(5), thread: Some(4) },
+            XzConfig { level: Some(9), thread: Some(8) },
+        ];
+        
+        for config in valid_configs {
+            assert!(config.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn test_xz_config_invalid_level() {
+        let config = XzConfig { level: Some(10), thread: Some(1) };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_xz_config_invalid_thread() {
+        let config = XzConfig { level: Some(5), thread: Some(0) };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_build_compressor_single_thread() {
+        let config = XzConfig { level: Some(6), thread: Some(1) };
+        let writer = Cursor::new(Vec::new());
+        let compressor = config.build_compressor(writer).unwrap();
+        
+        match compressor {
+            Compressor::XzEncoder(_) => (),
+            _ => panic!("Expected XzEncoder"),
+        }
+    }
+
+    #[test]
+    fn test_build_compressor_multi_thread() {
+        let config = XzConfig { level: Some(6), thread: Some(4) };
+        let writer = Cursor::new(Vec::new());
+        let compressor = config.build_compressor(writer).unwrap();
+        
+        match compressor {
+            Compressor::XzEncoder(_) => (),
+            _ => panic!("Expected XzEncoder"),
+        }
+    }
+
+    #[test]
+    fn test_build_compressor_auto_thread() {
+        let config = XzConfig { level: Some(6), thread: None };
+        let writer = Cursor::new(Vec::new());
+        let compressor = config.build_compressor(writer).unwrap();
+        
+        match compressor {
+            Compressor::XzEncoder(_) => (),
+            _ => panic!("Expected XzEncoder"),
+        }
+    }
+
+    #[test]
+    fn test_xz_config_serialization() {
+        let config = XzConfig { level: Some(6), thread: Some(4) };
+        let serialized = serde_json::to_string(&config).unwrap();
+        let deserialized: XzConfig = serde_json::from_str(&serialized).unwrap();
+        
+        assert_eq!(config.level, deserialized.level);
+        assert_eq!(config.thread, deserialized.thread);
+    }
+
+    #[test]
+    fn test_compression_level_defaults() {
+        let config = XzConfig::default();
+        let writer = Cursor::new(Vec::new());
+        let _compressor = config.build_compressor(writer).unwrap();
+        // Should use DEFAULT_COMPRESSION_LEVEL internally
+    }
+
+    #[test]
+    fn test_thread_count_calculation() {
+        // Test that thread count calculation doesn't panic
+        let config = XzConfig { level: None, thread: None };
+        let writer = Cursor::new(Vec::new());
+        let _compressor = config.build_compressor(writer).unwrap();
     }
 }

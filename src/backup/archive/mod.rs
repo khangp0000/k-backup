@@ -73,7 +73,7 @@ impl ArchiveEntry {
     /// 
     /// Used for regular files that should remain on the filesystem
     /// after being backed up.
-    fn keep_src<A: Into<Arc<Path>>, B: Into<Arc<Path>>>(src: A, dst: B) -> ArchiveEntry {
+    pub fn keep_src<A: Into<Arc<Path>>, B: Into<Arc<Path>>>(src: A, dst: B) -> ArchiveEntry {
         Self::new(src, dst, false)
     }
 
@@ -81,7 +81,7 @@ impl ArchiveEntry {
     /// 
     /// Used for temporary files (like SQLite backup copies) that should
     /// be cleaned up after being successfully added to the archive.
-    fn delete_src<A: Into<Arc<Path>>, B: Into<Arc<Path>>>(src: A, dst: B) -> ArchiveEntry {
+    pub fn delete_src<A: Into<Arc<Path>>, B: Into<Arc<Path>>>(src: A, dst: B) -> ArchiveEntry {
         Self::new(src, dst, true)
     }
 }
@@ -112,5 +112,47 @@ impl ArchiveEntryIterable for ArchiveEntryConfig {
             ArchiveEntryConfig::Glob(c) => c.archive_entry_iterator(),
         }
         .with_debug_object_and_fn_name(self.clone(), "archive_entry_iterator")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_archive_entry_creation() {
+        let src = PathBuf::from("/source/file.txt");
+        let dst = PathBuf::from("backup/file.txt");
+        
+        let entry = ArchiveEntry::keep_src(src.clone(), dst.clone());
+        assert_eq!(entry.src.as_ref(), src.as_path());
+        assert_eq!(entry.dst.as_ref(), dst.as_path());
+        assert!(!entry.delete_src);
+        
+        let entry = ArchiveEntry::delete_src(src.clone(), dst.clone());
+        assert_eq!(entry.src.as_ref(), src.as_path());
+        assert_eq!(entry.dst.as_ref(), dst.as_path());
+        assert!(entry.delete_src);
+    }
+
+    #[test]
+    fn test_archive_entry_new() {
+        let src = PathBuf::from("/source/file.txt");
+        let dst = PathBuf::from("backup/file.txt");
+        
+        let entry = ArchiveEntry::new(src.clone(), dst.clone(), true);
+        assert_eq!(entry.src.as_ref(), src.as_path());
+        assert_eq!(entry.dst.as_ref(), dst.as_path());
+        assert!(entry.delete_src);
+    }
+
+    #[test]
+    fn test_archive_entry_debug() {
+        let entry = ArchiveEntry::keep_src(PathBuf::from("/src"), PathBuf::from("dst"));
+        let debug_str = format!("{:?}", entry);
+        assert!(debug_str.contains("src"));
+        assert!(debug_str.contains("dst"));
+        assert!(debug_str.contains("delete_src"));
     }
 }

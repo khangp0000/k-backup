@@ -55,8 +55,14 @@ impl<W: Write> Finish<W> for Compressor<W> {
 impl<W: Write> CompressorBuilder<W> for CompressorConfig {
     fn build_compressor(&self, writer: W) -> Result<Compressor<W>> {
         match self {
-            CompressorConfig::None => Ok(Compressor::None(writer)),
-            CompressorConfig::Xz(xz) => xz.build_compressor(writer),
+            CompressorConfig::None => {
+                tracing::info!("Using no compression");
+                Ok(Compressor::None(writer))
+            },
+            CompressorConfig::Xz(xz) => {
+                tracing::info!("Initializing XZ compression");
+                xz.build_compressor(writer)
+            },
         }
         .with_debug_object_and_fn_name(self.clone(), "build_compressor")
     }
@@ -69,5 +75,63 @@ impl FileExtProvider for CompressorConfig {
             CompressorConfig::None => None,
             CompressorConfig::Xz(_) => Some(XZ_FILE_EXT.get_or_init(|| "xz".into()).clone()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backup::compress::xz::XzConfig;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_compressor_config_none() {
+        let config = CompressorConfig::None;
+        assert!(config.validate().is_ok());
+        assert!(config.file_ext().is_none());
+    }
+
+    #[test]
+    fn test_compressor_config_xz() {
+        let config = CompressorConfig::Xz(XzConfig::default());
+        assert!(config.validate().is_ok());
+        assert_eq!(config.file_ext(), Some("xz".into()));
+    }
+
+    #[test]
+    fn test_compressor_builder_none() {
+        let config = CompressorConfig::None;
+        let writer = Cursor::new(Vec::new());
+        let compressor = config.build_compressor(writer).unwrap();
+        
+        match compressor {
+            Compressor::None(_) => (),
+            _ => panic!("Expected None compressor"),
+        }
+    }
+
+    #[test]
+    fn test_compressor_finish_none() {
+        let writer = Cursor::new(Vec::new());
+        let compressor = Compressor::None(writer);
+        let result = compressor.finish();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_compressor_config_serialization() {
+        let config = CompressorConfig::None;
+        let serialized = serde_json::to_string(&config).unwrap();
+        assert!(serialized.contains("compressor_type"));
+        assert!(serialized.contains("none"));
+        
+        let deserialized: CompressorConfig = serde_json::from_str(&serialized).unwrap();
+        matches!(deserialized, CompressorConfig::None);
+    }
+
+    #[test]
+    fn test_compressor_config_default() {
+        let config = CompressorConfig::default();
+        matches!(config, CompressorConfig::None);
     }
 }

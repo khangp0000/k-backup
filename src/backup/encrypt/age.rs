@@ -48,7 +48,7 @@ pub struct RedactedString {
 impl Debug for RedactedString {
     /// Always shows redacted placeholder instead of actual value
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.serialize_str(REDACTED_PASSPHRASE)
+        write!(f, "{}", REDACTED_PASSPHRASE)
     }
 }
 
@@ -104,6 +104,7 @@ impl<W: Write> EncryptorBuilder<W> for AgeEncryptorConfig {
         match self {
             AgeEncryptorConfig::Passphrase { passphrase } => {
                 // Create Age encryptor with user passphrase
+                tracing::debug!("Initializing Age encryption with passphrase");
                 Ok(age::Encryptor::with_user_passphrase(
                     passphrase.expose_secret().inner.clone().into(),
                 )
@@ -128,5 +129,136 @@ impl Validate for AgeEncryptorConfig {
         match self {
             AgeEncryptorConfig::Passphrase { passphrase } => passphrase.expose_secret().validate(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use secrecy::Secret;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_redacted_string_debug() {
+        let redacted = RedactedString::from("secret_password".to_string());
+        let debug_str = format!("{:?}", redacted);
+        assert_eq!(debug_str, REDACTED_PASSPHRASE);
+        assert!(!debug_str.contains("secret_password"));
+    }
+
+    #[test]
+    fn test_redacted_string_serialize() {
+        let redacted = RedactedString::from("secret_password".to_string());
+        let serialized = serde_json::to_string(&redacted).unwrap();
+        assert_eq!(serialized, format!("\"{}\"", REDACTED_PASSPHRASE));
+        assert!(!serialized.contains("secret_password"));
+    }
+
+    #[test]
+    fn test_redacted_string_deserialize() {
+        let json = "\"actual_password_123\"";
+        let redacted: RedactedString = serde_json::from_str(json).unwrap();
+        assert_eq!(redacted.inner, "actual_password_123");
+    }
+
+    #[test]
+    fn test_redacted_string_validation() {
+        // Valid passphrase (8+ characters)
+        let valid = RedactedString::from("valid_password".to_string());
+        assert!(valid.validate().is_ok());
+        
+        // Invalid passphrase (too short)
+        let invalid = RedactedString::from("short".to_string());
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn test_redacted_string_zeroize() {
+        let mut redacted = RedactedString::from("secret_password".to_string());
+        redacted.zeroize();
+        // After zeroizing, the inner string should be cleared
+        // Note: We can't easily test this without exposing internals
+    }
+
+    #[test]
+    fn test_age_encryptor_config_validation() {
+        // Valid configuration
+        let valid_config = AgeEncryptorConfig::Passphrase {
+            passphrase: Secret::new(RedactedString::from("valid_passphrase_123".to_string())),
+        };
+        assert!(valid_config.validate().is_ok());
+        
+        // Invalid configuration (short passphrase)
+        let invalid_config = AgeEncryptorConfig::Passphrase {
+            passphrase: Secret::new(RedactedString::from("short".to_string())),
+        };
+        assert!(invalid_config.validate().is_err());
+    }
+
+    #[test]
+    fn test_age_encryptor_config_debug() {
+        let config = AgeEncryptorConfig::Passphrase {
+            passphrase: Secret::new(RedactedString::from("secret_password".to_string())),
+        };
+        let debug_str = format!("{:?}", config);
+        assert!(!debug_str.contains("secret_password"));
+        assert!(debug_str.contains("[REDACTED"));
+    }
+
+    #[test]
+    fn test_age_encryptor_config_serialization() {
+        let config = AgeEncryptorConfig::Passphrase {
+            passphrase: Secret::new(RedactedString::from("secret_password".to_string())),
+        };
+        
+        let serialized = serde_json::to_string(&config).unwrap();
+        assert!(!serialized.contains("secret_password"));
+        assert!(serialized.contains(REDACTED_PASSPHRASE));
+        assert!(serialized.contains("secret_type"));
+        assert!(serialized.contains("passphrase"));
+    }
+
+    #[test]
+    fn test_age_encryptor_config_deserialization() {
+        let json = r#"{"secret_type":"passphrase","passphrase":"actual_password_123"}"#;
+        let config: AgeEncryptorConfig = serde_json::from_str(json).unwrap();
+        
+        match config {
+            AgeEncryptorConfig::Passphrase { passphrase } => {
+                assert_eq!(passphrase.expose_secret().inner, "actual_password_123");
+            }
+        }
+    }
+
+    #[test]
+    fn test_build_encryptor() {
+        let config = AgeEncryptorConfig::Passphrase {
+            passphrase: Secret::new(RedactedString::from("test_passphrase_123".to_string())),
+        };
+        
+        let writer = Cursor::new(Vec::new());
+        let encryptor = config.build_encryptor(writer).unwrap();
+        
+        match encryptor {
+            Encryptor::AgeEncryptor(_) => (),
+            _ => panic!("Expected AgeEncryptor"),
+        }
+    }
+
+    #[test]
+    fn test_redacted_string_from_string() {
+        let original = "test_password".to_string();
+        let redacted = RedactedString::from(original.clone());
+        assert_eq!(redacted.inner, original);
+    }
+
+    #[test]
+    fn test_secret_traits() {
+        let redacted = RedactedString::from("test_password".to_string());
+        let secret = Secret::new(redacted);
+        
+        // Test that it implements the required secret traits
+        let _cloned = secret.clone();
+        let _debug = format!("{:?}", secret);
     }
 }
