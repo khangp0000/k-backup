@@ -35,6 +35,7 @@ use validator::{Validate, ValidationError};
 /// - How long backups are retained
 #[skip_serializing_none]
 #[derive(Clone, Serialize, Deserialize, Debug, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct BackupConfig {
     /// Cron expression defining backup schedule
     /// 

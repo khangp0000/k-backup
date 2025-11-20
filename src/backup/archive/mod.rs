@@ -18,6 +18,7 @@ use std::sync::Arc;
 #[derive(Clone, From, Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum ArchiveEntryConfig {
     /// SQLite database backup configuration
     /// 

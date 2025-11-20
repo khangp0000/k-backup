@@ -12,6 +12,7 @@ use tempfile::Builder;
 /// even while the database is being actively used by other processes.
 /// This is much safer than just copying the database file.
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct SqliteDBSource {
     /// Path to the source SQLite database file
     src: Arc<Path>,

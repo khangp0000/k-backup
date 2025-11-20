@@ -23,6 +23,7 @@ pub enum Compressor<W: Write> {
 #[derive(Clone, Default, From, Serialize, Deserialize, Debug)]
 #[serde(tag = "compressor_type")]
 #[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum CompressorConfig {
     #[default]
     None,

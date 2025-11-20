@@ -7,6 +7,10 @@ use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
 use validator::Validate;
 
+fn default_min_backups() -> usize {
+    3
+}
+
 /// Configuration for backup retention policies
 /// 
 /// Defines how long different types of backups should be kept:
@@ -14,11 +18,13 @@ use validator::Validate;
 /// - daily_retention: Special retention for daily backups (keeps one per day)
 /// - monthly_retention: Special retention for monthly backups (keeps one per month)  
 /// - yearly_retention: Special retention for yearly backups (keeps one per year)
+/// - min_backups: Minimum number of backups to always keep (safety net)
 /// 
 /// The algorithm keeps the most recent backup in each time category,
 /// allowing for grandfather-father-son backup rotation schemes.
 #[skip_serializing_none]
 #[derive(Clone, Default, Validate, Serialize, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct RetentionConfig {
     /// Base retention period applied to all backups
     /// 
@@ -47,6 +53,14 @@ pub struct RetentionConfig {
     /// Example: "5years" keeps one backup per year for the last 5 years.
     #[serde(with = "humantime_serde")]
     pub yearly_retention: Option<std::time::Duration>,
+    
+    /// Minimum number of backups to always keep
+    /// 
+    /// Safety net to prevent all backups from being deleted if the system
+    /// hasn't run for a long time. Always keeps at least this many of the
+    /// most recent backups, regardless of age.
+    #[serde(default = "default_min_backups")]
+    pub min_backups: usize,
 }
 
 impl RetentionConfig {
@@ -57,7 +71,8 @@ impl RetentionConfig {
     /// 
     /// 1. Applies default retention to all backups
     /// 2. Preserves the most recent backup from each day/month/year
-    /// 3. Returns an iterator of backups that should be deleted
+    /// 3. Ensures at least min_backups are always kept (safety net)
+    /// 4. Returns an iterator of backups that should be deleted
     /// 
     /// The algorithm ensures that even if a backup is older than default_retention,
     /// it will be kept if it's the most recent backup for its time period
@@ -88,9 +103,19 @@ impl RetentionConfig {
             .map(Result::unwrap);
         let mut last_keep = None;
 
-        let iter = iter
+        let all_items: Vec<_> = iter
             .into_iter()
             .sorted_unstable_by_key(|r| Reverse(r.as_ref().date_time.clone()))
+            .collect();
+        
+        let max_deletions = all_items.len().saturating_sub(self.min_backups);
+        
+        if max_deletions == 0 {
+            return Box::new(std::iter::empty());
+        }
+
+        let deletion_candidates: Vec<_> = all_items
+            .into_iter()
             .filter(move |r| {
                 let utc_date_time = r.as_ref().date_time.to_utc();
                 println!("{:?}", utc_date_time);
@@ -122,8 +147,10 @@ impl RetentionConfig {
 
                 println!();
                 return !should_keep;
-            });
+            })
+            .collect();
 
+        let iter = deletion_candidates.into_iter().rev().take(max_deletions);
         Box::new(iter)
     }
 }

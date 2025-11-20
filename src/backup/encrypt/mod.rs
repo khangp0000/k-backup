@@ -23,6 +23,7 @@ pub enum Encryptor<W: Write> {
 #[derive(Clone, Default, From, Serialize, Deserialize, Debug)]
 #[serde(tag = "encryptor_type")]
 #[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum EncryptorConfig {
     #[default]
     None,

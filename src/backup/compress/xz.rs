@@ -19,6 +19,7 @@ static DEFAULT_MAX_PARALLELIZATION: usize = 32;
 /// Supports parallel compression for better performance on multi-core systems.
 #[skip_serializing_none]
 #[derive(Clone, Default, Validate, Serialize, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct XzConfig {
     /// Compression level (0-9)
     /// 

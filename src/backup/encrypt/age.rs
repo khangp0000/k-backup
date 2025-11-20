@@ -22,6 +22,7 @@ static REDACTED_PASSPHRASE: &str = "###REDACTED_PASSPHRASE###";
 #[derive(From, Clone, Deserialize, Serialize, Debug)]
 #[serde(tag = "secret_type")]
 #[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum AgeEncryptorConfig {
     /// Passphrase-based encryption
     /// 

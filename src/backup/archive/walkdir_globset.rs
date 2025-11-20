@@ -13,6 +13,7 @@ use walkdir::WalkDir;
 
 #[skip_serializing_none]
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WalkdirAndGlobsetSource {
     src_dir: Arc<Path>,
     dst_dir: Option<Arc<Path>>,
