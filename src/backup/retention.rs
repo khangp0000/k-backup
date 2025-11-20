@@ -7,20 +7,61 @@ use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
 use validator::Validate;
 
+/// Configuration for backup retention policies
+/// 
+/// Defines how long different types of backups should be kept:
+/// - default_retention: Applied to all backups
+/// - daily_retention: Special retention for daily backups (keeps one per day)
+/// - monthly_retention: Special retention for monthly backups (keeps one per month)  
+/// - yearly_retention: Special retention for yearly backups (keeps one per year)
+/// 
+/// The algorithm keeps the most recent backup in each time category,
+/// allowing for grandfather-father-son backup rotation schemes.
 #[skip_serializing_none]
 #[derive(Clone, Default, Validate, Serialize, Deserialize, Debug)]
 pub struct RetentionConfig {
+    /// Base retention period applied to all backups
+    /// 
+    /// Backups older than this duration are eligible for deletion,
+    /// unless they're preserved by daily/monthly/yearly retention rules.
     #[serde(with = "humantime_serde")]
     pub default_retention: std::time::Duration,
+    
+    /// How long to keep daily backups (one per day)
+    /// 
+    /// The most recent backup from each day within this period is preserved.
+    /// Example: "7days" keeps one backup per day for the last week.
     #[serde(with = "humantime_serde")]
     pub daily_retention: Option<std::time::Duration>,
+    
+    /// How long to keep monthly backups (one per month)
+    /// 
+    /// The most recent backup from each month within this period is preserved.
+    /// Example: "3months" keeps one backup per month for the last 3 months.
     #[serde(with = "humantime_serde")]
     pub monthly_retention: Option<std::time::Duration>,
+    
+    /// How long to keep yearly backups (one per year)
+    /// 
+    /// The most recent backup from each year within this period is preserved.
+    /// Example: "5years" keeps one backup per year for the last 5 years.
     #[serde(with = "humantime_serde")]
     pub yearly_retention: Option<std::time::Duration>,
 }
 
 impl RetentionConfig {
+    /// Determines which backups should be deleted based on retention policy
+    /// 
+    /// This is the core retention algorithm that implements grandfather-father-son
+    /// backup rotation. It:
+    /// 
+    /// 1. Applies default retention to all backups
+    /// 2. Preserves the most recent backup from each day/month/year
+    /// 3. Returns an iterator of backups that should be deleted
+    /// 
+    /// The algorithm ensures that even if a backup is older than default_retention,
+    /// it will be kept if it's the most recent backup for its time period
+    /// (daily/monthly/yearly) and within that retention window.
     pub fn get_delete<R, T, I, II>(
         &self,
         iter: I,
