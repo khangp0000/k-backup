@@ -188,6 +188,9 @@ mod tests {
     fn test_archive_entry_debug() {
         let entry = ArchiveEntry::new(PathBuf::from("/src"), PathBuf::from("dst"));
         let debug_str = format!("{:?}", entry);
-        assert_eq!(debug_str, "ArchiveEntry { src: Path(\"/src\"), dst: \"dst\" }");
+        assert_eq!(
+            debug_str,
+            "ArchiveEntry { src: Path(\"/src\"), dst: \"dst\" }"
+        );
     }
 }

@@ -1,7 +1,8 @@
 use crate::backup::archive::{ArchiveEntry, ArchiveEntryIterable};
 use crate::backup::result_error::result::Result;
-use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
+use serde_with::base64::Base64;
+use serde_with::As;
 use std::io::Cursor;
 use std::path::PathBuf;
 
@@ -13,13 +14,14 @@ use std::path::PathBuf;
 #[serde(deny_unknown_fields)]
 pub struct Base64Source {
     /// Base64-encoded content
-    content: String,
+    #[serde(with = "As::<Base64>")]
+    content: Vec<u8>,
     /// Destination path within the archive
     dst: PathBuf,
 }
 
 impl Base64Source {
-    pub fn new(content: String, dst: PathBuf) -> Self {
+    pub fn new(content: Vec<u8>, dst: PathBuf) -> Self {
         Self { content, dst }
     }
 }
@@ -28,16 +30,7 @@ impl ArchiveEntryIterable for Base64Source {
     fn archive_entry_iterator(
         &self,
     ) -> Result<Box<dyn Iterator<Item = Result<ArchiveEntry>> + Send>> {
-        let decoded = general_purpose::STANDARD
-            .decode(&self.content)
-            .map_err(|e| {
-                crate::backup::result_error::error::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e,
-                ))
-            })?;
-
-        let reader = Box::new(Cursor::new(decoded));
+        let reader = Box::new(Cursor::new(self.content.clone()));
         let entry = ArchiveEntry::new_reader(reader, self.dst.clone());
 
         Ok(Box::new(std::iter::once(Ok(entry))))
@@ -51,7 +44,7 @@ mod tests {
 
     #[test]
     fn test_base64_source_creation() {
-        let content = general_purpose::STANDARD.encode("test content");
+        let content = vec![1, 2, 3, 4, 5];
         let source = Base64Source::new(content.clone(), PathBuf::from("test.txt"));
 
         assert_eq!(source.content, content);
@@ -61,9 +54,11 @@ mod tests {
     #[test]
     fn test_base64_source_iterator() {
         let original_content = "Hello, World!";
-        let encoded_content = general_purpose::STANDARD.encode(original_content);
 
-        let source = Base64Source::new(encoded_content, PathBuf::from("hello.txt"));
+        let source = Base64Source::new(
+            original_content.as_bytes().into(),
+            PathBuf::from("hello.txt"),
+        );
 
         let mut iterator = source.archive_entry_iterator().unwrap();
         let entry_result = iterator.next().unwrap();
@@ -83,23 +78,12 @@ mod tests {
     }
 
     #[test]
-    fn test_base64_source_invalid_base64() {
-        let source = Base64Source::new("invalid base64!@#".to_string(), PathBuf::from("test.txt"));
-
-        let result = source.archive_entry_iterator();
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_base64_source_serialization() {
-        let source = Base64Source::new(
-            general_purpose::STANDARD.encode("test"),
-            PathBuf::from("test.txt"),
-        );
+        let source = Base64Source::new("test".as_bytes().into(), PathBuf::from("test.txt"));
 
         let serialized = serde_json::to_string(&source).unwrap();
         let deserialized: Base64Source = serde_json::from_str(&serialized).unwrap();
-
+        println!("{}", serialized);
         assert_eq!(source.content, deserialized.content);
         assert_eq!(source.dst, deserialized.dst);
     }

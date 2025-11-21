@@ -12,6 +12,9 @@ files:
       - attachments/**/*
       - rsa_key*
       - icon_cache/**/*
+  - type: base64
+    content: "SGVsbG8gSSBsb3ZlIHU="
+    dst: test.iluvu.txt
 encryptor:
   encryptor_type: age
   secret_type: passphrase

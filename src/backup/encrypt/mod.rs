@@ -135,6 +135,4 @@ mod tests {
         let config = EncryptorConfig::default();
         matches!(config, EncryptorConfig::None);
     }
-
-
 }

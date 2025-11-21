@@ -129,7 +129,7 @@ impl BackupConfig {
     }
 
     /// Extracts timestamp from backup filename
-    /// 
+    ///
     /// Returns None if filename doesn't match expected format
     pub fn get_date_time_from_file_path<P: AsRef<Path>>(
         &self,
@@ -172,7 +172,7 @@ impl BackupConfig {
     }
 
     /// Spawns background thread to collect archive entries
-    /// 
+    ///
     /// Returns (thread_handle, entry_receiver)
     fn spawn_entry_collector(
         &self,
@@ -211,7 +211,7 @@ impl BackupConfig {
     }
 
     /// Creates backup archive with compression and encryption
-    /// 
+    ///
     /// Returns (archive_path, non_fatal_error)
     pub fn create_archive(
         &self,
@@ -239,8 +239,10 @@ impl BackupConfig {
                 tracing::info!("Finalizing archive: moving from temp to final location");
                 temp_file
                     .persist(&file_path)
+                    .map(|_| 0)
+                    .or_else(|e| std::fs::copy(e.file, &file_path))
                     .map(|_| file_path)
-                    .map_err(|e| Error::from(e.error))
+                    .map_err(Error::from)
             }
             Err(e) => Err(e.with_debug_object_and_fn_name(self.clone(), "create_write_archive")),
         };
@@ -256,7 +258,7 @@ impl BackupConfig {
     }
 
     /// Executes one backup cycle: retention cleanup and backup creation
-    /// 
+    ///
     /// Returns next scheduled backup time
     pub fn execute_backup_cycle(
         &self,
@@ -308,7 +310,7 @@ impl BackupConfig {
 
         let next_backup = cron_parser::parse(&self.cron, &now).unwrap();
         tracing::info!("Next backup scheduled for: {}", next_backup);
-        
+
         Ok(next_backup)
     }
 
@@ -377,12 +379,7 @@ mod tests {
 
     #[test]
     fn test_valid_cron_expressions() {
-        let valid_crons = vec![
-            "0 1 * * *",
-            "0 */6 * * *",
-            "0 2 * * 0",
-            "*/15 * * * *",
-        ];
+        let valid_crons = vec!["0 1 * * *", "0 */6 * * *", "0 2 * * 0", "*/15 * * * *"];
 
         for cron in valid_crons {
             let result = validate_cron_str(&cron.to_string());
@@ -392,12 +389,7 @@ mod tests {
 
     #[test]
     fn test_invalid_cron_expressions() {
-        let invalid_crons = vec![
-            "invalid",
-            "60 1 * * *",
-            "0 25 * * *",
-            "0 1 32 * *",
-        ];
+        let invalid_crons = vec!["invalid", "60 1 * * *", "0 25 * * *", "0 1 32 * *"];
 
         for cron in invalid_crons {
             let result = validate_cron_str(&cron.to_string());
@@ -455,18 +447,14 @@ mod tests {
     fn test_archive_base_name_validation() {
         let valid_names = vec!["backup", "test_backup", "my-backup-123"];
         for name in valid_names {
-            let result = validate_valid_archive_base_name(&name);
+            let result = validate_valid_archive_base_name(name);
             assert!(result.is_ok(), "Name '{}' should be valid", name);
         }
 
         let long_name = "x".repeat(101);
-        let invalid_names = vec![
-            "backup/with/slash",
-            "backup\0with\0null",
-            &long_name,
-        ];
+        let invalid_names = vec!["backup/with/slash", "backup\0with\0null", &long_name];
         for name in invalid_names {
-            let result = validate_valid_archive_base_name(&name);
+            let result = validate_valid_archive_base_name(name);
             assert!(result.is_err(), "Name '{}' should be invalid", name);
         }
     }
@@ -504,7 +492,7 @@ mod tests {
     #[test]
     fn test_execute_backup_cycle() {
         use crate::backup::archive::base64::Base64Source;
-        use base64::{engine::general_purpose, Engine as _};
+
         use rayon::ThreadPoolBuilder;
         use std::fs::{create_dir_all, write};
         use std::time::Duration as StdDuration;
@@ -518,7 +506,7 @@ mod tests {
             archive_base_name: "test_backup".to_string(),
             out_dir: backup_dir.clone(),
             files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
-                general_purpose::STANDARD.encode("test content"),
+                "test content".as_bytes().into(),
                 PathBuf::from("test.txt"),
             ))],
             compressor: CompressorConfig::None,
@@ -545,11 +533,11 @@ mod tests {
             "test_backup.{}.tar",
             (now - chrono::Duration::hours(12)).format("%Y-%m-%dT%Hh%Mm%Ss_0000")
         ));
-        
+
         // Create the actual files
         write(&old_backup_path, "old backup content").unwrap();
         write(&recent_backup_path, "recent backup content").unwrap();
-        
+
         // Add them to backup set
         backup_set.insert(Rc::new(ItemWithDateTime::from((
             old_backup_path.clone(),
@@ -587,7 +575,7 @@ mod tests {
     #[test]
     fn test_execute_backup_cycle_with_complex_retention() {
         use crate::backup::archive::base64::Base64Source;
-        use base64::{engine::general_purpose, Engine as _};
+
         use rayon::ThreadPoolBuilder;
         use std::fs::{create_dir_all, write};
         use std::time::Duration as StdDuration;
@@ -601,7 +589,7 @@ mod tests {
             archive_base_name: "test_backup".to_string(),
             out_dir: backup_dir.clone(),
             files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
-                general_purpose::STANDARD.encode("test content"),
+                "test content".as_bytes().into(),
                 PathBuf::from("test.txt"),
             ))],
             compressor: CompressorConfig::None,
@@ -632,12 +620,12 @@ mod tests {
             "test_backup.{}.tar",
             (now - chrono::Duration::hours(12)).format("%Y-%m-%dT%Hh%Mm%Ss_0000")
         ));
-        
+
         // Create the actual files
         write(&very_old_path, "very old backup").unwrap();
         write(&old_but_daily_kept_path, "old but daily kept backup").unwrap();
         write(&recent_path, "recent backup").unwrap();
-        
+
         // Add them to backup set
         backup_set.insert(Rc::new(ItemWithDateTime::from((
             very_old_path.clone(),
@@ -662,9 +650,18 @@ mod tests {
             .unwrap();
 
         // Verify retention cleanup worked correctly
-        assert!(!very_old_path.exists(), "Very old backup should be deleted (outside daily retention)");
-        assert!(old_but_daily_kept_path.exists(), "Old backup should be kept (within daily retention)");
-        assert!(recent_path.exists(), "Recent backup should be kept (within default retention)");
+        assert!(
+            !very_old_path.exists(),
+            "Very old backup should be deleted (outside daily retention)"
+        );
+        assert!(
+            old_but_daily_kept_path.exists(),
+            "Old backup should be kept (within daily retention)"
+        );
+        assert!(
+            recent_path.exists(),
+            "Recent backup should be kept (within default retention)"
+        );
 
         // Verify new backup was created
         assert_eq!(backup_set.len(), 3); // old_but_daily_kept + recent + new backup
@@ -681,7 +678,7 @@ mod tests {
     #[test]
     fn test_execute_backup_cycle_min_backups_safety() {
         use crate::backup::archive::base64::Base64Source;
-        use base64::{engine::general_purpose, Engine as _};
+
         use rayon::ThreadPoolBuilder;
         use std::fs::{create_dir_all, write};
         use std::time::Duration as StdDuration;
@@ -695,7 +692,7 @@ mod tests {
             archive_base_name: "test_backup".to_string(),
             out_dir: backup_dir.clone(),
             files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
-                general_purpose::STANDARD.encode("test content"),
+                "test content".as_bytes().into(),
                 PathBuf::from("test.txt"),
             ))],
             compressor: CompressorConfig::None,
@@ -722,10 +719,10 @@ mod tests {
             "test_backup.{}.tar",
             (now - chrono::Duration::days(2)).format("%Y-%m-%dT%Hh%Mm%Ss_0000")
         ));
-        
+
         write(&old_backup1_path, "old backup 1").unwrap();
         write(&old_backup2_path, "old backup 2").unwrap();
-        
+
         backup_set.insert(Rc::new(ItemWithDateTime::from((
             old_backup1_path.clone(),
             now - chrono::Duration::days(1),
@@ -745,8 +742,14 @@ mod tests {
 
         // Both old backups should be kept due to min_backups safety net
         // even though they're expired by default_retention
-        assert!(old_backup1_path.exists(), "Old backup 1 should be kept (min_backups safety)");
-        assert!(old_backup2_path.exists(), "Old backup 2 should be kept (min_backups safety)");
+        assert!(
+            old_backup1_path.exists(),
+            "Old backup 1 should be kept (min_backups safety)"
+        );
+        assert!(
+            old_backup2_path.exists(),
+            "Old backup 2 should be kept (min_backups safety)"
+        );
 
         // New backup should be created
         assert_eq!(backup_set.len(), 3); // 2 old + 1 new = 3 (exactly min_backups)
@@ -769,7 +772,7 @@ mod tests {
         use crate::backup::encrypt::age::{AgeEncryptorConfig, RedactedString};
         use ::tar::Archive;
         use age::Decryptor;
-        use base64::{engine::general_purpose, Engine as _};
+
         use liblzma::read::XzDecoder;
         use rayon::ThreadPoolBuilder;
 
@@ -794,7 +797,7 @@ mod tests {
             out_dir: backup_dir.clone(),
             files: vec![
                 ArchiveEntryConfig::Base64(Base64Source::new(
-                    general_purpose::STANDARD.encode("base64 content"),
+                    "base64 content".as_bytes().into(),
                     PathBuf::from("base64.txt"),
                 )),
                 ArchiveEntryConfig::Glob(WalkdirAndGlobsetSource::new(
@@ -825,8 +828,10 @@ mod tests {
         // Decrypt and decompress to verify content
         let encrypted_file = std::fs::File::open(&archive_path).unwrap();
         let decryptor = Decryptor::new(BufReader::new(encrypted_file)).unwrap();
-        
-        let identity = age::scrypt::Identity::new(age::secrecy::SecretString::new(passphrase.to_string().into()));
+
+        let identity = age::scrypt::Identity::new(age::secrecy::SecretString::new(
+            passphrase.to_string().into(),
+        ));
         let decrypted_reader = decryptor
             .decrypt(std::iter::once(&identity as &dyn age::Identity))
             .unwrap();

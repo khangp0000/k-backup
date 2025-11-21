@@ -57,7 +57,7 @@ impl Debug for CustomDeserializedGlob {
 
 struct CustomGlobVisitor;
 
-impl<'de> Visitor<'de> for CustomGlobVisitor {
+impl Visitor<'_> for CustomGlobVisitor {
     type Value = CustomDeserializedGlob;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {

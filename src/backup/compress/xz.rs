@@ -85,7 +85,7 @@ impl<W: Write> CompressorBuilder<W> for XzConfig {
 
         if thread == 1 {
             // Single-threaded compression (less memory usage)
-            Ok(XzEncoder::new(writer, level).into())
+            Ok(Compressor::XzEncoder(XzEncoder::new(writer, level)))
         } else {
             // Multi-threaded compression (faster but more memory)
             let stream = MtStreamBuilder::new()
@@ -93,7 +93,9 @@ impl<W: Write> CompressorBuilder<W> for XzConfig {
                 .check(Check::Crc64) // Integrity checking
                 .threads(thread)
                 .encoder()?;
-            Ok(XzEncoder::new_stream(writer, stream).into())
+            Ok(Compressor::XzEncoder(
+                XzEncoder::new_stream(writer, stream),
+            ))
         }
     }
 }
@@ -209,6 +211,4 @@ mod tests {
         assert_eq!(config.level, deserialized.level);
         assert_eq!(config.thread, deserialized.thread);
     }
-
-
 }

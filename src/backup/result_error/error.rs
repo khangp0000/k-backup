@@ -82,7 +82,11 @@ impl Error {
     }
 
     pub fn chain(self, other: Error) -> Error {
-        Error::LotsOfError(self.into_box_iter().chain(other.into_box_iter()).collect_vec())
+        Error::LotsOfError(
+            self.into_box_iter()
+                .chain(other.into_box_iter())
+                .collect_vec(),
+        )
     }
 }
 

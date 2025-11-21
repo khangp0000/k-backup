@@ -45,7 +45,7 @@ pub struct RedactedString {
     inner: Box<str>,
 }
 
-impl <T: AsRef<str>> From<T> for RedactedString {
+impl<T: AsRef<str>> From<T> for RedactedString {
     fn from(value: T) -> Self {
         Self {
             inner: value.as_ref().into(),
@@ -69,7 +69,7 @@ impl Serialize for RedactedString {
 
 struct RedactedStringVisitor;
 
-impl<'de> Visitor<'de> for RedactedStringVisitor {
+impl Visitor<'_> for RedactedStringVisitor {
     type Value = RedactedString;
 
     fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
@@ -81,7 +81,7 @@ impl<'de> Visitor<'de> for RedactedStringVisitor {
     where
         E: serde::de::Error,
     {
-        Ok(RedactedString{ inner: v.into() })
+        Ok(RedactedString { inner: v.into() })
     }
 }
 
@@ -110,11 +110,11 @@ impl<W: Write> EncryptorBuilder<W> for AgeEncryptorConfig {
             AgeEncryptorConfig::Passphrase { passphrase } => {
                 // Create Age encryptor with user passphrase
                 tracing::debug!("Initializing Age encryption with passphrase");
-                Ok(age::Encryptor::with_user_passphrase(
-                    passphrase.inner.deref().into(),
+                Ok(
+                    age::Encryptor::with_user_passphrase(passphrase.inner.deref().into())
+                        .wrap_output(writer)?
+                        .into(),
                 )
-                .wrap_output(writer)?
-                .into())
             }
         }
     }
@@ -197,7 +197,10 @@ mod tests {
             passphrase: RedactedString::from("secret_password"),
         };
         let debug_str = format!("{:?}", config);
-        assert_eq!(debug_str, format!("Passphrase {{ passphrase: {} }}", REDACTED_PASSPHRASE));
+        assert_eq!(
+            debug_str,
+            format!("Passphrase {{ passphrase: {} }}", REDACTED_PASSPHRASE)
+        );
     }
 
     #[test]
@@ -207,7 +210,13 @@ mod tests {
         };
 
         let serialized = serde_json::to_string(&config).unwrap();
-        assert_eq!(serialized, format!("{{\"secret_type\":\"passphrase\",\"passphrase\":\"{}\"}}", REDACTED_PASSPHRASE));
+        assert_eq!(
+            serialized,
+            format!(
+                "{{\"secret_type\":\"passphrase\",\"passphrase\":\"{}\"}}",
+                REDACTED_PASSPHRASE
+            )
+        );
     }
 
     #[test]

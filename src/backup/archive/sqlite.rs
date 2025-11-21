@@ -128,7 +128,10 @@ mod tests {
         );
 
         let debug_str = format!("{:?}", source);
-        assert_eq!(debug_str, "SqliteDBSource { src: \"/path/to/database.db\", dst: \"backup/database.db\" }");
+        assert_eq!(
+            debug_str,
+            "SqliteDBSource { src: \"/path/to/database.db\", dst: \"backup/database.db\" }"
+        );
     }
 
     #[test]

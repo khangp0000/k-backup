@@ -307,8 +307,10 @@ mod tests {
         };
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
-        let backups = [ItemWithDateTime::from(("recent", now - Duration::days(3))),
-            ItemWithDateTime::from(("old", now - Duration::days(10)))];
+        let backups = [
+            ItemWithDateTime::from(("recent", now - Duration::days(3))),
+            ItemWithDateTime::from(("old", now - Duration::days(10))),
+        ];
 
         let to_delete = config.get_delete(backups.iter(), now);
 
@@ -328,8 +330,7 @@ mod tests {
         };
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
-        let backups = vec![
-            // Two backups from the same day (5 days ago)
+        let backups = [
             ItemWithDateTime::from(("day5_backup1", now - Duration::days(5) - Duration::hours(2))),
             ItemWithDateTime::from(("day5_backup2", now - Duration::days(5) - Duration::hours(1))),
             // One backup from 10 days ago (outside daily retention)
@@ -353,8 +354,7 @@ mod tests {
         };
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
-        let backups = vec![
-            // Two backups from the same month (30 days ago)
+        let backups = [
             ItemWithDateTime::from(("month1_backup1", now - Duration::days(30))),
             ItemWithDateTime::from(("month1_backup2", now - Duration::days(35))),
             // One backup from 120 days ago (outside monthly retention)
@@ -378,8 +378,7 @@ mod tests {
         };
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
-        let backups = vec![
-            // Two backups from the same year (1 year ago)
+        let backups = [
             ItemWithDateTime::from(("year1_backup1", now - Duration::days(365))),
             ItemWithDateTime::from(("year1_backup2", now - Duration::days(370))),
             // One backup from 4 years ago (outside yearly retention)
@@ -397,8 +396,7 @@ mod tests {
         let config = create_test_retention_config();
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
 
-        let backups = vec![
-            // Recent backups (within default retention)
+        let backups = [
             ItemWithDateTime::from(("recent1", now - Duration::days(1))),
             ItemWithDateTime::from(("recent2", now - Duration::days(2))),
             // Daily retention candidates
