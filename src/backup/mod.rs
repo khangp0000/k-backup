@@ -6,3 +6,4 @@ pub mod file_ext;
 pub mod finish;
 pub mod result_error;
 pub mod retention;
+pub mod tar;

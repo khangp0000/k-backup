@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
 pub trait FileExtProvider {
-    fn file_ext(&self) -> Option<Arc<str>>;
+    fn file_ext(&self) -> Option<impl AsRef<str>>;
 }
 
 #[cfg(test)]
@@ -9,48 +7,46 @@ mod tests {
     use super::*;
 
     struct TestProvider {
-        ext: Option<Arc<str>>,
+        ext: Option<&'static str>,
     }
 
     impl FileExtProvider for TestProvider {
-        fn file_ext(&self) -> Option<Arc<str>> {
-            self.ext.clone()
+        fn file_ext(&self) -> Option<impl AsRef<str>> {
+            self.ext
         }
     }
 
     #[test]
     fn test_file_ext_provider_some() {
-        let provider = TestProvider {
-            ext: Some("txt".into()),
-        };
-        
-        assert_eq!(provider.file_ext(), Some("txt".into()));
+        let provider = TestProvider { ext: Some("txt") };
+
+        assert!(provider.file_ext().is_some());
+        assert_eq!(provider.file_ext().unwrap().as_ref(), "txt");
     }
 
     #[test]
     fn test_file_ext_provider_none() {
         let provider = TestProvider { ext: None };
-        
-        assert_eq!(provider.file_ext(), None);
+
+        assert!(provider.file_ext().is_none());
     }
 
     #[test]
     fn test_file_ext_provider_arc_str() {
-        let ext: Arc<str> = "json".into();
-        let provider = TestProvider {
-            ext: Some(ext.clone()),
-        };
-        
-        assert_eq!(provider.file_ext(), Some(ext));
+        let ext = "json";
+        let provider = TestProvider { ext: Some(ext) };
+
+        assert!(provider.file_ext().is_some());
+        assert_eq!(provider.file_ext().unwrap().as_ref(), ext);
     }
 
     #[test]
     fn test_file_ext_provider_multiple_calls() {
-        let provider = TestProvider {
-            ext: Some("xml".into()),
-        };
-        
+        let provider = TestProvider { ext: Some("xml") };
+
         // Multiple calls should return the same value
-        assert_eq!(provider.file_ext(), provider.file_ext());
+        let first_ext = provider.file_ext().unwrap();
+        let second_ext = provider.file_ext().unwrap();
+        assert_eq!(first_ext.as_ref(), second_ext.as_ref());
     }
 }

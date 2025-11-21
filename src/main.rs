@@ -10,20 +10,20 @@ use tracing::error;
 use validator::Validate;
 
 /// k-backup: Automated backup tool with encryption, compression, and retention
-/// 
+///
 /// Creates scheduled backups of files and SQLite databases using:
 /// - Cron-based scheduling
-/// - XZ compression 
+/// - XZ compression
 /// - Age encryption
 /// - Configurable retention policies
-/// 
+///
 /// The tool runs as a daemon, continuously checking the cron schedule
 /// and creating backups when due.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
     /// Path to YAML configuration file
-    /// 
+    ///
     /// The config file specifies:
     /// - Backup schedule (cron expression)
     /// - Source files/directories to backup

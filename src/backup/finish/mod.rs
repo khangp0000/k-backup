@@ -31,7 +31,7 @@ mod tests {
     impl Finish<Cursor<Vec<u8>>> for TestFinisher {
         fn finish(self) -> Result<Cursor<Vec<u8>>, Error> {
             if self.should_fail {
-                Err(Error::new(std::io::ErrorKind::Other, "Test failure"))
+                Err(Error::other("Test failure"))
             } else {
                 Ok(self.inner)
             }
@@ -45,10 +45,10 @@ mod tests {
             inner: cursor,
             should_fail: false,
         };
-        
+
         let result = finisher.finish();
         assert!(result.is_ok());
-        
+
         let returned_cursor = result.unwrap();
         assert_eq!(returned_cursor.get_ref(), &vec![1, 2, 3]);
     }
@@ -60,10 +60,10 @@ mod tests {
             inner: cursor,
             should_fail: true,
         };
-        
+
         let result = finisher.finish();
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::Other);
         assert_eq!(error.to_string(), "Test failure");
@@ -73,7 +73,7 @@ mod tests {
     fn test_xz_encoder_finish_impl() {
         let cursor = Cursor::new(Vec::new());
         let encoder = XzEncoder::new(cursor, 1);
-        
+
         // This should compile and work with the Finish trait
         let result = encoder.finish();
         assert!(result.is_ok());

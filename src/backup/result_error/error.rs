@@ -67,23 +67,22 @@ impl From<Vec<Error>> for Error {
         Self::LotsOfError(
             errors
                 .into_iter()
-                .map(|e| e.into_iter())
-                .flatten()
+                .flat_map(|e| e.into_box_iter())
                 .collect_vec(),
         )
     }
 }
 
 impl Error {
-    pub fn into_iter(self) -> Box<dyn Iterator<Item = Error>> {
+    pub fn into_box_iter(self) -> Box<dyn Iterator<Item = Error>> {
         match self {
-            Error::LotsOfError(v) => Box::new(v.into_iter().map(|e| e.into_iter()).flatten()),
+            Error::LotsOfError(v) => Box::new(v.into_iter().flat_map(|e| e.into_box_iter())),
             e => Box::new(std::iter::once(e)),
         }
     }
 
     pub fn chain(self, other: Error) -> Error {
-        Error::LotsOfError(self.into_iter().chain(other.into_iter()).collect_vec())
+        Error::LotsOfError(self.into_box_iter().chain(other.into_box_iter()).collect_vec())
     }
 }
 
@@ -96,7 +95,7 @@ mod tests {
     fn test_error_from_io_error() {
         let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let error = Error::from(io_error);
-        
+
         match error {
             Error::Io(_) => (),
             _ => panic!("Expected Io error"),
@@ -108,7 +107,7 @@ mod tests {
         let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let error = Error::from(io_error);
         let error_with_msg = error.with_msg("Custom message");
-        
+
         match error_with_msg {
             Error::WithMsg { msg, .. } => assert_eq!(msg, "Custom message"),
             _ => panic!("Expected WithMsg error"),
@@ -121,7 +120,7 @@ mod tests {
         let error = Error::from(io_error);
         let test_obj = "test_object";
         let error_with_debug = error.with_debug_object_and_fn_name(test_obj, "test_function");
-        
+
         match error_with_debug {
             Error::WithDebugObjAndFnName { fn_name, .. } => assert_eq!(fn_name, "test_function"),
             _ => panic!("Expected WithDebugObjAndFnName error"),
@@ -132,7 +131,7 @@ mod tests {
     fn test_error_from_send_error() {
         let (tx, _rx) = mpsc::channel();
         drop(_rx); // Close receiver to cause send error
-        
+
         let send_result = tx.send("test");
         match send_result {
             Err(send_error) => {
@@ -150,9 +149,12 @@ mod tests {
     fn test_error_from_vec() {
         let errors = vec![
             Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "error1")),
-            Error::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "error2")),
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "error2",
+            )),
         ];
-        
+
         let combined_error = Error::from(errors);
         match combined_error {
             Error::LotsOfError(error_vec) => assert_eq!(error_vec.len(), 2),
@@ -170,8 +172,8 @@ mod tests {
     #[test]
     fn test_error_into_iter() {
         let error = Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "test"));
-        let mut iter = error.into_iter();
-        
+        let mut iter = error.into_box_iter();
+
         assert!(iter.next().is_some());
         assert!(iter.next().is_none());
     }
@@ -180,19 +182,25 @@ mod tests {
     fn test_error_into_iter_lots_of_error() {
         let errors = vec![
             Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "error1")),
-            Error::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "error2")),
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "error2",
+            )),
         ];
         let combined_error = Error::from(errors);
-        let iter = combined_error.into_iter();
-        
+        let iter = combined_error.into_box_iter();
+
         assert_eq!(iter.count(), 2);
     }
 
     #[test]
     fn test_error_chain() {
         let error1 = Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "error1"));
-        let error2 = Error::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "error2"));
-        
+        let error2 = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "error2",
+        ));
+
         let chained = error1.chain(error2);
         match chained {
             Error::LotsOfError(errors) => assert_eq!(errors.len(), 2),
@@ -205,7 +213,7 @@ mod tests {
         let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let error = Error::from(io_error);
         let error_str = error.to_string();
-        assert!(error_str.contains("file not found"));
+        assert_eq!(error_str, "file not found");
     }
 
     #[test]
@@ -214,9 +222,7 @@ mod tests {
         let error = Error::from(io_error);
         let error_with_msg = error.with_msg("Operation failed");
         let error_str = error_with_msg.to_string();
-        
-        assert!(error_str.contains("Operation failed"));
-        assert!(error_str.contains("file not found"));
+        assert_eq!(error_str, "Operation failed:\n  file not found");
     }
 
     #[test]
@@ -226,9 +232,6 @@ mod tests {
         let test_obj = 42;
         let error_with_debug = error.with_debug_object_and_fn_name(test_obj, "test_function");
         let error_str = error_with_debug.to_string();
-        
-        assert!(error_str.contains("test_function"));
-        assert!(error_str.contains("failed"));
-        assert!(error_str.contains("file not found"));
+        assert_eq!(error_str, "42 test_function failed:\n  file not found");
     }
 }
