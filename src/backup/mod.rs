@@ -7,3 +7,4 @@ pub mod finish;
 pub mod result_error;
 pub mod retention;
 pub mod tar;
+pub mod validate;

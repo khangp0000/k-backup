@@ -7,10 +7,14 @@ use crate::backup::archive::sqlite::SqliteDBSource;
 use crate::backup::archive::walkdir_globset::WalkdirAndGlobsetSource;
 use crate::backup::result_error::result::Result;
 use crate::backup::result_error::AddDebugObjectAndFnName;
+use derive_ctor::ctor;
 use derive_more::From;
+use dyn_iter::DynIter;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
+use validator::{Validate, ValidationErrors};
 
 /// Trait combining Read, Send, and Debug for readable sources
 pub trait ReadableSource: Read + Send + std::fmt::Debug {}
@@ -40,24 +44,36 @@ impl<T> ArchivePath for T where T: AsRef<Path> + Send + std::fmt::Debug {}
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
+#[derive(ctor)]
+#[ctor(prefix = new, vis = pub)]
 pub enum ArchiveEntryConfig {
     /// SQLite database backup configuration
     ///
     /// Uses SQLite's built-in backup API to create consistent database snapshots
     /// even while the database is being used by other processes.
-    Sqlite(SqliteDBSource),
+    Sqlite(#[ctor(into)] SqliteDBSource),
 
     /// File/directory glob pattern configuration
     ///
     /// Uses directory walking combined with glob pattern matching to select
     /// files and directories for backup. Supports complex include/exclude patterns.
-    Glob(WalkdirAndGlobsetSource),
+    Glob(#[ctor(into)] Arc<WalkdirAndGlobsetSource>),
 
     /// Base64-encoded content configuration
     ///
     /// Creates archive entries from base64-encoded content.
     /// Primarily useful for testing and small in-memory content.
-    Base64(Base64Source),
+    Base64(#[ctor(into)] Base64Source),
+}
+
+impl Validate for ArchiveEntryConfig {
+    fn validate(&self) -> std::result::Result<(), ValidationErrors> {
+        match self {
+            ArchiveEntryConfig::Sqlite(i) => i.validate(),
+            ArchiveEntryConfig::Glob(i) => i.validate(),
+            ArchiveEntryConfig::Base64(i) => i.validate(),
+        }
+    }
 }
 
 /// Source type for archive entries
@@ -135,21 +151,17 @@ pub trait ArchiveEntryIterable {
     ///
     /// The iterator yields Results to handle errors during source scanning
     /// (e.g., permission denied, missing files, etc.)
-    fn archive_entry_iterator(
-        &self,
-    ) -> Result<Box<dyn Iterator<Item = Result<ArchiveEntry>> + Send>>;
+    fn archive_entry_iterator<'a>(&self) -> Result<DynIter<'a, Result<ArchiveEntry>>>;
 }
 
 impl ArchiveEntryIterable for ArchiveEntryConfig {
-    fn archive_entry_iterator(
-        &self,
-    ) -> Result<Box<dyn Iterator<Item = Result<ArchiveEntry>> + Send>> {
+    fn archive_entry_iterator<'a>(&self) -> Result<DynIter<'a, Result<ArchiveEntry>>> {
         match self {
             ArchiveEntryConfig::Sqlite(c) => c.archive_entry_iterator(),
             ArchiveEntryConfig::Glob(c) => c.archive_entry_iterator(),
             ArchiveEntryConfig::Base64(c) => c.archive_entry_iterator(),
         }
-        .add_debug_object_and_fn_name(self.clone(), "archive_entry_iterator")
+        .add_debug_object_and_fn_name(self, "archive_entry_iterator")
     }
 }
 

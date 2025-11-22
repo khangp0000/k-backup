@@ -1,47 +1,37 @@
 use crate::backup::archive::{ArchiveEntry, ArchiveEntryIterable};
 use crate::backup::result_error::result::Result;
+use crate::backup::result_error::AddDebugObjectAndFnName;
+use crate::backup::validate::validate_sql_file;
+use derive_ctor::ctor;
+use dyn_iter::{DynIter, IntoDynIterator};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-
+use std::fmt::Debug;
+use std::path::PathBuf;
 use tempfile::NamedTempFile;
+use validator::Validate;
 
 /// Configuration for backing up SQLite database files
 ///
 /// Uses SQLite's built-in backup API to create consistent snapshots
 /// even while the database is being actively used by other processes.
 /// This is much safer than just copying the database file.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Validate)]
 #[serde(deny_unknown_fields)]
+#[derive(ctor)]
+#[ctor(pub new)]
 pub struct SqliteDBSource {
     /// Path to the source SQLite database file
+    #[ctor(into)]
+    #[validate(custom(function = validate_sql_file))]
     src: PathBuf,
     /// Destination path within the backup archive
+    #[ctor(into)]
     dst: PathBuf,
 }
 
 impl SqliteDBSource {
-    pub fn new<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q) -> Self {
-        Self {
-            src: src.as_ref().to_path_buf(),
-            dst: dst.as_ref().to_path_buf(),
-        }
-    }
-}
-
-impl ArchiveEntryIterable for SqliteDBSource {
-    /// Creates a temporary backup of the SQLite database
-    ///
-    /// Process:
-    /// 1. Opens the source database in read-only mode
-    /// 2. Creates a temporary file for the backup
-    /// 3. Uses SQLite's backup API to copy the database
-    /// 4. Returns an ArchiveEntry that will delete the temp file after backup
-    ///
-    /// The temporary file is marked for deletion after being added to the archive.
-    fn archive_entry_iterator(
-        &self,
-    ) -> Result<Box<dyn Iterator<Item = Result<ArchiveEntry>> + Send>> {
+    fn create_archive_entry(&self) -> Result<ArchiveEntry> {
         tracing::info!("Starting SQLite backup for database: {:?}", self.src);
 
         // Open database in read-only mode with no mutex (safe for backup)
@@ -71,10 +61,26 @@ impl ArchiveEntryIterable for SqliteDBSource {
             temp_file.path(),
             self.dst
         );
-        Ok(Box::new(std::iter::once(Ok(ArchiveEntry::new(
-            temp_file,
-            self.dst.clone(),
-        )))))
+        Ok(ArchiveEntry::new(temp_file, self.dst.clone()))
+    }
+}
+
+impl ArchiveEntryIterable for SqliteDBSource {
+    /// Creates a temporary backup of the SQLite database
+    ///
+    /// Process:
+    /// 1. Opens the source database in read-only mode
+    /// 2. Creates a temporary file for the backup
+    /// 3. Uses SQLite's backup API to copy the database
+    /// 4. Returns an ArchiveEntry that will delete the temp file after backup
+    ///
+    /// The temporary file is marked for deletion after being added to the archive.
+    fn archive_entry_iterator<'a>(&self) -> Result<DynIter<'a, Result<ArchiveEntry>>> {
+        Ok(std::iter::once(
+            self.create_archive_entry()
+                .add_debug_object_and_fn_name(self, "archive_entry_iterator"),
+        )
+        .into_dyn_iter())
     }
 }
 
@@ -82,6 +88,7 @@ impl ArchiveEntryIterable for SqliteDBSource {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -176,7 +183,7 @@ mod tests {
             PathBuf::from("backup/database.db"),
         );
 
-        let result = source.archive_entry_iterator();
+        let result = source.validate();
         assert!(result.is_err());
     }
 
@@ -190,7 +197,7 @@ mod tests {
 
         let source = SqliteDBSource::new(invalid_db_path, PathBuf::from("backup/invalid.db"));
 
-        let result = source.archive_entry_iterator();
+        let result = source.archive_entry_iterator().unwrap().next().unwrap();
         assert!(result.is_err());
     }
 

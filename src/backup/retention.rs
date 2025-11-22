@@ -211,17 +211,14 @@ fn should_keep<O: Copy, T: TimeZone<Offset = O>, R: Ord, F: Fn(&DateTime<T>) -> 
 }
 
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
-pub struct ItemWithDateTime<R, T: TimeZone> {
+pub struct ItemWithDateTime<R, T: TimeZone = Utc> {
     pub item: R,
     pub date_time: Rc<DateTime<T>>,
 }
 
 impl<T: TimeZone> ItemWithDateTime<(), T> {
-    fn new(date_time: DateTime<T>) -> Self {
-        ItemWithDateTime {
-            item: (),
-            date_time: date_time.into(),
-        }
+    fn new<D: Into<Rc<DateTime<T>>>>(date_time: D) -> Self {
+        Self::from(((), date_time.into()))
     }
 }
 
@@ -231,11 +228,11 @@ impl<T: TimeZone> From<DateTime<T>> for ItemWithDateTime<(), T> {
     }
 }
 
-impl<R, T: TimeZone> From<(R, DateTime<T>)> for ItemWithDateTime<R, T> {
-    fn from(value: (R, DateTime<T>)) -> Self {
+impl<R, T: TimeZone, D: Into<Rc<DateTime<T>>>> From<(R, D)> for ItemWithDateTime<R, T> {
+    fn from(value: (R, D)) -> Self {
         Self {
             item: value.0,
-            date_time: Rc::new(value.1),
+            date_time: value.1.into(),
         }
     }
 }

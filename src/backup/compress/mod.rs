@@ -4,6 +4,7 @@ use crate::backup::file_ext::FileExtProvider;
 use crate::backup::finish::Finish;
 use crate::backup::result_error::result::Result;
 use crate::backup::result_error::AddDebugObjectAndFnName;
+use derive_ctor::ctor;
 use derive_more::From;
 use io_enum::Write;
 use liblzma::write::XzEncoder;
@@ -11,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::io::Write;
 use std::result;
-
 use validator::{Validate, ValidationErrors};
 
 #[derive(Write, From)]
@@ -24,10 +24,13 @@ pub enum Compressor<W: Write> {
 #[serde(tag = "compressor_type")]
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
+#[derive(ctor)]
+#[ctor(prefix = new, vis = pub)]
+#[from(forward)]
 pub enum CompressorConfig {
     #[default]
     None,
-    Xz(xz::XzConfig),
+    Xz(#[ctor(into)] xz::XzConfig),
 }
 
 impl Validate for CompressorConfig {
@@ -92,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_compressor_config_xz() {
-        let config = CompressorConfig::Xz(XzConfig::default());
+        let config = CompressorConfig::Xz(XzConfig::new(1, 2));
         assert!(config.validate().is_ok());
         assert!(config.file_ext().is_some());
         assert_eq!(config.file_ext().unwrap().as_ref(), "xz");

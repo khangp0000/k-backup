@@ -16,7 +16,7 @@ use rayon::ThreadPool;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use std::collections::HashSet;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::fs::read_dir;
 
 use std::path::{Path, PathBuf};
@@ -26,7 +26,10 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use tempfile::NamedTempFile;
 
-use validator::{Validate, ValidationError};
+use crate::backup::validate::validate_cron_str;
+use crate::backup::validate::validate_valid_archive_base_name;
+use crate::backup::validate::validate_writable_dir;
+use validator::Validate;
 
 /// Main configuration structure for the backup system
 #[skip_serializing_none]
@@ -42,66 +45,24 @@ pub struct BackupConfig {
     pub archive_base_name: String,
 
     /// Directory where backup files will be created
-    #[validate(custom(function = validate_out_dir))]
+    #[validate(custom(function = validate_writable_dir))]
     pub out_dir: PathBuf,
 
     /// List of files and directories to include in backups
+    #[validate(length(min = 1), nested)]
     pub files: Vec<ArchiveEntryConfig>,
 
     /// Compression configuration
+    #[validate(nested)]
     pub compressor: CompressorConfig,
 
     /// Encryption configuration
+    #[validate(nested)]
     pub encryptor: EncryptorConfig,
 
     /// Optional retention policy for automatic cleanup
+    #[validate(nested)]
     pub retention: Option<RetentionConfig>,
-}
-
-fn validate_cron_str(cron: &String) -> std::result::Result<(), ValidationError> {
-    if cron_parser::parse(cron, &Utc::now()).is_err() {
-        return Err(ValidationError::new("InvalidCron")
-            .with_message(format!("Invalid cron string: {cron:?}").into()));
-    }
-
-    Ok(())
-}
-
-fn validate_out_dir(dir: &PathBuf) -> std::result::Result<(), ValidationError> {
-    if dir.exists() {
-        if !dir.is_dir() {
-            return Err(ValidationError::new("InvalidDirectory")
-                .with_message("out_dir is not a directory".into()));
-        }
-    } else {
-        return std::fs::create_dir_all(dir).map_err(|e| {
-            ValidationError::new("InvalidDirectory").with_message(
-                format!("cannot create or access out_dir path {:?}: {}", dir, e).into(),
-            )
-        });
-    }
-
-    Ok(())
-}
-
-#[cfg(target_family = "unix")]
-fn validate_valid_archive_base_name(name: &str) -> std::result::Result<(), ValidationError> {
-    if name.chars().any(|c| c == '/' || c == '\0') {
-        return Err(ValidationError::new("InvalidArchiveBaseName")
-            .with_message("Invalid archive_base_name, must not contain '/' or null".into()));
-    }
-
-    if name.len() > 100 {
-        return Err(ValidationError::new("InvalidArchiveBaseName")
-            .with_message("Invalid archive_base_name, maximum len is 100".into()));
-    }
-
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn validate_valid_archive_base_name(_name: &str) -> std::result::Result<(), ValidationError> {
-    Ok(())
 }
 
 static TIME_FORMAT: &str = "%Y-%m-%dT%Hh%Mm%Ss%z";
@@ -123,7 +84,7 @@ impl BackupConfig {
     fn time_file_ext<O: Display, T: TimeZone<Offset = O>>(&self, dt: DateTime<T>) -> String {
         let time_str = dt.format(TIME_FORMAT).to_string().replace('+', "_");
         match self.file_ext() {
-            Some(ext) => format!("{}.{}", time_str, ext.as_ref() as &str),
+            Some(ext) => format!("{}.{}", time_str, ext.as_ref()),
             None => time_str,
         }
     }
@@ -138,7 +99,7 @@ impl BackupConfig {
         let file_name = file_path.as_ref().file_name()?.to_str()?;
         let (start_idx, end_idx) = match self.file_ext() {
             Some(ext) => {
-                let end = format!(".{}", ext.as_ref() as &str);
+                let end = format!(".{}", ext.as_ref());
                 if !file_name.ends_with(&end) {
                     return None;
                 }
@@ -383,7 +344,7 @@ mod tests {
         let valid_crons = vec!["0 1 * * *", "0 */6 * * *", "0 2 * * 0", "*/15 * * * *"];
 
         for cron in valid_crons {
-            let result = validate_cron_str(&cron.to_string());
+            let result = validate_cron_str(cron);
             assert!(result.is_ok(), "Cron '{}' should be valid", cron);
         }
     }
@@ -393,7 +354,7 @@ mod tests {
         let invalid_crons = vec!["invalid", "60 1 * * *", "0 25 * * *", "0 1 32 * *"];
 
         for cron in invalid_crons {
-            let result = validate_cron_str(&cron.to_string());
+            let result = validate_cron_str(cron);
             assert!(result.is_err(), "Cron '{}' should be invalid", cron);
         }
     }
@@ -403,7 +364,7 @@ mod tests {
         let config = create_test_config();
         let ext = config.file_ext();
         assert!(ext.is_some());
-        assert_eq!(ext.unwrap().as_ref() as &str, "tar");
+        assert_eq!(ext.unwrap().as_ref(), "tar");
     }
 
     #[test]
@@ -452,25 +413,12 @@ mod tests {
             assert!(result.is_ok(), "Name '{}' should be valid", name);
         }
 
-        let long_name = "x".repeat(101);
+        let long_name = "x".repeat(256);
         let invalid_names = vec!["backup/with/slash", "backup\0with\0null", &long_name];
         for name in invalid_names {
             let result = validate_valid_archive_base_name(name);
             assert!(result.is_err(), "Name '{}' should be invalid", name);
         }
-    }
-
-    #[test]
-    fn test_out_dir_validation() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let result = validate_out_dir(&temp_dir.path().to_path_buf());
-        assert!(result.is_ok());
-
-        let new_dir = temp_dir.path().join("new_dir");
-        let result = validate_out_dir(&new_dir.clone());
-        assert!(result.is_ok());
-        assert!(new_dir.exists());
     }
 
     #[test]
@@ -507,7 +455,7 @@ mod tests {
             archive_base_name: "test_backup".to_string(),
             out_dir: backup_dir.clone(),
             files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
-                "test content".as_bytes().into(),
+                "test content",
                 PathBuf::from("test.txt"),
             ))],
             compressor: CompressorConfig::None,
@@ -590,7 +538,7 @@ mod tests {
             archive_base_name: "test_backup".to_string(),
             out_dir: backup_dir.clone(),
             files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
-                "test content".as_bytes().into(),
+                "test content",
                 PathBuf::from("test.txt"),
             ))],
             compressor: CompressorConfig::None,
@@ -693,7 +641,7 @@ mod tests {
             archive_base_name: "test_backup".to_string(),
             out_dir: backup_dir.clone(),
             files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
-                "test content".as_bytes().into(),
+                "test content",
                 PathBuf::from("test.txt"),
             ))],
             compressor: CompressorConfig::None,
@@ -798,18 +746,18 @@ mod tests {
             out_dir: backup_dir.clone(),
             files: vec![
                 ArchiveEntryConfig::Base64(Base64Source::new(
-                    "base64 content".as_bytes().into(),
+                    "base64 content",
                     PathBuf::from("base64.txt"),
                 )),
-                ArchiveEntryConfig::Glob(WalkdirAndGlobsetSource::new(
+                ArchiveEntryConfig::new_glob(WalkdirAndGlobsetSource::new(
                     source_dir.clone(),
-                    None::<PathBuf>,
-                    Some(vec![txt_glob]),
+                    "",
+                    vec![txt_glob],
                 )),
             ],
-            compressor: CompressorConfig::Xz(XzConfig::new(6, Some(2)).unwrap()),
+            compressor: CompressorConfig::Xz(XzConfig::new(6, 2)),
             encryptor: EncryptorConfig::Age(AgeEncryptorConfig::Passphrase {
-                passphrase: RedactedString::from(passphrase),
+                passphrase: RedactedString::new(passphrase),
             }),
             retention: None,
         };

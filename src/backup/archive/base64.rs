@@ -1,39 +1,89 @@
 use crate::backup::archive::{ArchiveEntry, ArchiveEntryIterable};
 use crate::backup::result_error::result::Result;
+use derive_ctor::ctor;
+use derive_more::From;
+use dyn_iter::{DynIter, IntoDynIterator};
 use serde::{Deserialize, Serialize};
 use serde_with::base64::Base64;
 use serde_with::As;
 use std::io::Cursor;
+use std::ops::Deref;
 use std::path::PathBuf;
+use std::sync::Arc;
+use validator::Validate;
 
 /// Base64-encoded content source for archive entries
 ///
 /// This source type allows creating archive entries from base64-encoded content,
 /// which is particularly useful for testing and small in-memory data.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
+#[derive(ctor)]
+#[ctor(pub new)]
 pub struct Base64Source {
     /// Base64-encoded content
     #[serde(with = "As::<Base64>")]
-    content: Vec<u8>,
+    #[ctor(into)]
+    content: ArcVec<u8>,
     /// Destination path within the archive
+    #[ctor(into)]
     dst: PathBuf,
 }
 
-impl Base64Source {
-    pub fn new(content: Vec<u8>, dst: PathBuf) -> Self {
-        Self { content, dst }
+#[derive(From, Clone, Debug, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq, ctor)]
+#[ctor(pub new)]
+struct ArcVec<T> {
+    #[ctor(into)]
+    inner: Arc<Vec<T>>,
+}
+impl<T> AsRef<[T]> for ArcVec<T> {
+    fn as_ref(&self) -> &[T] {
+        self.inner.deref().as_ref()
+    }
+}
+
+macro_rules! impl_into_arcvec {
+    ($ty:ty) => {
+        impl<T> From<$ty> for ArcVec<T>
+        where
+            $ty: Into<Vec<T>>,
+        {
+            fn from(val: $ty) -> ArcVec<T> {
+                ArcVec::from(val.into())
+            }
+        }
+    };
+    (a $ty:ty) => {
+        impl<'a, T> From<$ty> for ArcVec<T>
+        where
+            $ty: Into<Vec<T>>,
+        {
+            fn from(val: $ty) -> ArcVec<T> {
+                ArcVec::from(val.into())
+            }
+        }
+    };
+}
+
+impl_into_arcvec!(String);
+impl_into_arcvec!(Box<str>);
+impl_into_arcvec!(Box<[T]>);
+impl_into_arcvec!(a &'a str);
+impl_into_arcvec!(a &'a String);
+impl_into_arcvec!(a &'a [T]);
+
+impl<T> From<Vec<T>> for ArcVec<T> {
+    fn from(value: Vec<T>) -> Self {
+        Self::new(value)
     }
 }
 
 impl ArchiveEntryIterable for Base64Source {
-    fn archive_entry_iterator(
-        &self,
-    ) -> Result<Box<dyn Iterator<Item = Result<ArchiveEntry>> + Send>> {
+    fn archive_entry_iterator<'a>(&self) -> Result<DynIter<'a, Result<ArchiveEntry>>> {
         let reader = Box::new(Cursor::new(self.content.clone()));
         let entry = ArchiveEntry::new_reader(reader, self.dst.clone());
 
-        Ok(Box::new(std::iter::once(Ok(entry))))
+        Ok(std::iter::once(Ok(entry)).into_dyn_iter())
     }
 }
 
@@ -47,7 +97,7 @@ mod tests {
         let content = vec![1, 2, 3, 4, 5];
         let source = Base64Source::new(content.clone(), PathBuf::from("test.txt"));
 
-        assert_eq!(source.content, content);
+        assert_eq!(source.content.as_ref(), content);
         assert_eq!(source.dst, PathBuf::from("test.txt"));
     }
 
@@ -55,10 +105,7 @@ mod tests {
     fn test_base64_source_iterator() {
         let original_content = "Hello, World!";
 
-        let source = Base64Source::new(
-            original_content.as_bytes().into(),
-            PathBuf::from("hello.txt"),
-        );
+        let source = Base64Source::new(original_content, PathBuf::from("hello.txt"));
 
         let mut iterator = source.archive_entry_iterator().unwrap();
         let entry_result = iterator.next().unwrap();
@@ -79,7 +126,7 @@ mod tests {
 
     #[test]
     fn test_base64_source_serialization() {
-        let source = Base64Source::new("test".as_bytes().into(), PathBuf::from("test.txt"));
+        let source = Base64Source::new("test", PathBuf::from("test.txt"));
 
         let serialized = serde_json::to_string(&source).unwrap();
         let deserialized: Base64Source = serde_json::from_str(&serialized).unwrap();

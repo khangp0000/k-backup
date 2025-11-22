@@ -6,12 +6,12 @@ use crate::backup::finish::Finish;
 use crate::backup::result_error::result::Result;
 use crate::backup::result_error::AddDebugObjectAndFnName;
 use ::age::stream::StreamWriter;
+use derive_ctor::ctor;
 use derive_more::From;
 use io_enum::Write;
 use serde::{Deserialize, Serialize};
 use std::io::{Error, Write};
 use std::result;
-
 use validator::{Validate, ValidationErrors};
 
 #[derive(Write, From)]
@@ -24,10 +24,12 @@ pub enum Encryptor<W: Write> {
 #[serde(tag = "encryptor_type")]
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
+#[derive(ctor)]
+#[ctor(prefix = new, vis = pub)]
 pub enum EncryptorConfig {
     #[default]
     None,
-    Age(AgeEncryptorConfig),
+    Age(#[ctor(into)] AgeEncryptorConfig),
 }
 
 impl Validate for EncryptorConfig {
@@ -93,7 +95,7 @@ mod tests {
     #[test]
     fn test_encryptor_config_age() {
         let config = EncryptorConfig::Age(AgeEncryptorConfig::Passphrase {
-            passphrase: RedactedString::from("test_passphrase_123"),
+            passphrase: RedactedString::new("test_passphrase_123"),
         });
         assert!(config.validate().is_ok());
         assert!(config.file_ext().is_some());

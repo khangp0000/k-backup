@@ -1,9 +1,10 @@
 use crate::backup::compress::{Compressor, CompressorBuilder};
 use crate::backup::result_error::result::Result;
+use derive_ctor::ctor;
 use liblzma::stream::{Check, MtStreamBuilder};
 use liblzma::write::XzEncoder;
+use saturating_cast::SaturatingCast;
 use serde::{Deserialize, Serialize};
-use serde_with::skip_serializing_none;
 use std::io::Write;
 use std::num::NonZero;
 use validator::Validate;
@@ -17,9 +18,10 @@ static DEFAULT_MAX_PARALLELIZATION: usize = 32;
 ///
 /// XZ provides excellent compression ratios at the cost of CPU time.
 /// Supports parallel compression for better performance on multi-core systems.
-#[skip_serializing_none]
-#[derive(Clone, Default, Validate, Serialize, Deserialize, Debug)]
+#[derive(Clone, Validate, Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
+#[derive(ctor)]
+#[ctor(pub new)]
 pub struct XzConfig {
     /// Compression level (0-9)
     ///
@@ -29,31 +31,32 @@ pub struct XzConfig {
     ///
     /// Higher levels use significantly more CPU time for diminishing returns.
     #[validate(range(min = 0, max = 9))]
-    level: Option<u32>,
+    #[serde(default = "default_level")]
+    level: u32,
 
     /// Number of compression threads
     ///
     /// - 1: Single-threaded (slower but less memory)
-    /// - Auto: Half of available CPU cores (default)
+    /// - Auto: Half of available CPU cores, at most 32 (default)
     /// - Higher: More parallel compression (uses more memory)
     ///
     /// More threads = faster compression but higher memory usage.
     #[validate(range(min = 1))]
-    thread: Option<u32>,
+    #[serde(default = "default_thread")]
+    thread: usize,
 }
 
-impl XzConfig {
-    pub fn new(
-        level: u32,
-        thread: Option<u32>,
-    ) -> std::result::Result<Self, validator::ValidationErrors> {
-        let config = Self {
-            level: Some(level),
-            thread,
-        };
-        config.validate()?;
-        Ok(config)
-    }
+fn default_level() -> u32 {
+    DEFAULT_COMPRESSION_LEVEL
+}
+
+fn default_thread() -> usize {
+    std::thread::available_parallelism()
+        .map(NonZero::get)
+        .inspect_err(|err| tracing::warn!("error getting parallelism {:?}", err))
+        .map(|core| core / 2) // Use half of available cores
+        .map(|t| t.max(1).min(DEFAULT_MAX_PARALLELIZATION)) // At least 1 thread
+        .unwrap_or(1)
 }
 
 impl<W: Write> CompressorBuilder<W> for XzConfig {
@@ -65,17 +68,10 @@ impl<W: Write> CompressorBuilder<W> for XzConfig {
     ///
     /// Returns configured XZ compressor
     fn build_compressor(&self, writer: W) -> Result<Compressor<W>> {
-        let level = self.level.unwrap_or(DEFAULT_COMPRESSION_LEVEL);
+        let level = self.level;
 
         // Auto-detect optimal thread count if not specified
-        let thread = self.thread.unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(NonZero::get)
-                .map(|core| core / 2) // Use half of available cores
-                .map(|t| t.max(1)) // At least 1 thread
-                .map(|t| t.min(DEFAULT_MAX_PARALLELIZATION) as u32) // Cap at max
-                .unwrap_or(1)
-        });
+        let thread = self.thread;
 
         tracing::debug!(
             "Creating XZ compressor with level={}, threads={}",
@@ -91,7 +87,7 @@ impl<W: Write> CompressorBuilder<W> for XzConfig {
             let stream = MtStreamBuilder::new()
                 .preset(level)
                 .check(Check::Crc64) // Integrity checking
-                .threads(thread)
+                .threads(thread.saturating_cast())
                 .encoder()?;
             Ok(Compressor::XzEncoder(XzEncoder::new_stream(writer, stream)))
         }
@@ -104,28 +100,20 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
-    fn test_xz_config_default() {
-        let config = XzConfig::default();
-        assert!(config.level.is_none());
-        assert!(config.thread.is_none());
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
     fn test_xz_config_validation() {
         // Valid configurations
         let valid_configs = vec![
             XzConfig {
-                level: Some(0),
-                thread: Some(1),
+                level: 0,
+                thread: 4,
             },
             XzConfig {
-                level: Some(5),
-                thread: Some(4),
+                level: 5,
+                thread: 4,
             },
             XzConfig {
-                level: Some(9),
-                thread: Some(8),
+                level: 9,
+                thread: 8,
             },
         ];
 
@@ -137,8 +125,8 @@ mod tests {
     #[test]
     fn test_xz_config_invalid_level() {
         let config = XzConfig {
-            level: Some(10),
-            thread: Some(1),
+            level: 10,
+            thread: 1,
         };
         assert!(config.validate().is_err());
     }
@@ -146,8 +134,8 @@ mod tests {
     #[test]
     fn test_xz_config_invalid_thread() {
         let config = XzConfig {
-            level: Some(5),
-            thread: Some(0),
+            level: 5,
+            thread: 0,
         };
         assert!(config.validate().is_err());
     }
@@ -155,8 +143,8 @@ mod tests {
     #[test]
     fn test_build_compressor_single_thread() {
         let config = XzConfig {
-            level: Some(6),
-            thread: Some(1),
+            level: 6,
+            thread: 1,
         };
         let writer = Cursor::new(Vec::new());
         let compressor = config.build_compressor(writer).unwrap();
@@ -170,23 +158,8 @@ mod tests {
     #[test]
     fn test_build_compressor_multi_thread() {
         let config = XzConfig {
-            level: Some(6),
-            thread: Some(4),
-        };
-        let writer = Cursor::new(Vec::new());
-        let compressor = config.build_compressor(writer).unwrap();
-
-        match compressor {
-            Compressor::XzEncoder(_) => (),
-            _ => panic!("Expected XzEncoder"),
-        }
-    }
-
-    #[test]
-    fn test_build_compressor_auto_thread() {
-        let config = XzConfig {
-            level: Some(6),
-            thread: None,
+            level: 6,
+            thread: 4,
         };
         let writer = Cursor::new(Vec::new());
         let compressor = config.build_compressor(writer).unwrap();
@@ -200,8 +173,8 @@ mod tests {
     #[test]
     fn test_xz_config_serialization() {
         let config = XzConfig {
-            level: Some(6),
-            thread: Some(4),
+            level: 6,
+            thread: 4,
         };
         let serialized = serde_json::to_string(&config).unwrap();
         let deserialized: XzConfig = serde_json::from_str(&serialized).unwrap();

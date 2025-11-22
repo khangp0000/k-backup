@@ -44,7 +44,7 @@ fn main() {
         .with_thread_ids(true)
         .with_target(true)
         .init();
-    
+
     let args = Args::parse();
 
     // Create thread pool for parallel operations during backup creation
