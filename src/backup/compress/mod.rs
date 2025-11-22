@@ -3,7 +3,7 @@ pub mod xz;
 use crate::backup::file_ext::FileExtProvider;
 use crate::backup::finish::Finish;
 use crate::backup::result_error::result::Result;
-use crate::backup::result_error::WithDebugObjectAndFnName;
+use crate::backup::result_error::AddDebugObjectAndFnName;
 use derive_more::From;
 use io_enum::Write;
 use liblzma::write::XzEncoder;
@@ -64,7 +64,7 @@ impl<W: Write> CompressorBuilder<W> for CompressorConfig {
                 xz.build_compressor(writer)
             }
         }
-        .with_debug_object_and_fn_name(self.clone(), "build_compressor")
+        .add_debug_object_and_fn_name(self.clone(), "build_compressor")
     }
 }
 

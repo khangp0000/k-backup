@@ -93,9 +93,7 @@ impl<W: Write> CompressorBuilder<W> for XzConfig {
                 .check(Check::Crc64) // Integrity checking
                 .threads(thread)
                 .encoder()?;
-            Ok(Compressor::XzEncoder(
-                XzEncoder::new_stream(writer, stream),
-            ))
+            Ok(Compressor::XzEncoder(XzEncoder::new_stream(writer, stream)))
         }
     }
 }

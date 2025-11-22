@@ -6,7 +6,7 @@ use crate::backup::archive::base64::Base64Source;
 use crate::backup::archive::sqlite::SqliteDBSource;
 use crate::backup::archive::walkdir_globset::WalkdirAndGlobsetSource;
 use crate::backup::result_error::result::Result;
-use crate::backup::result_error::WithDebugObjectAndFnName;
+use crate::backup::result_error::AddDebugObjectAndFnName;
 use derive_more::From;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -149,7 +149,7 @@ impl ArchiveEntryIterable for ArchiveEntryConfig {
             ArchiveEntryConfig::Glob(c) => c.archive_entry_iterator(),
             ArchiveEntryConfig::Base64(c) => c.archive_entry_iterator(),
         }
-        .with_debug_object_and_fn_name(self.clone(), "archive_entry_iterator")
+        .add_debug_object_and_fn_name(self.clone(), "archive_entry_iterator")
     }
 }
 

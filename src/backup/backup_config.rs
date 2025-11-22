@@ -7,7 +7,7 @@ use crate::backup::tar;
 use crate::backup::result_error::error::Error;
 use crate::backup::result_error::result::convert_error_vec;
 use crate::backup::result_error::result::Result;
-use crate::backup::result_error::{WithDebugObjectAndFnName, WithMsg};
+use crate::backup::result_error::{AddDebugObjectAndFnName, AddMsg};
 use crate::backup::retention::{ItemWithDateTime, RetentionConfig};
 use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
@@ -190,7 +190,7 @@ impl BackupConfig {
                             let errors = iter
                                 .filter_map(|archive_entry_result| {
                                     archive_entry_result
-                                        .with_msg("Ignoring entry")
+                                        .add_msg("Ignoring entry")
                                         .and_then(|archive_entry| {
                                             result_tx.send(Ok(archive_entry)).map_err(Error::from)
                                         })
@@ -244,8 +244,9 @@ impl BackupConfig {
                     .map(|_| file_path)
                     .map_err(Error::from)
             }
-            Err(e) => Err(e.with_debug_object_and_fn_name(self.clone(), "create_write_archive")),
-        };
+            Err(e) => Err(e),
+        }
+        .add_debug_object_and_fn_name(self.clone(), "create_write_archive");
 
         let entry_create_res = entry_handle.join().unwrap();
         match archive_create_res {

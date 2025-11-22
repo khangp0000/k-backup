@@ -1,18 +1,19 @@
 use crate::backup::result_error::error::Error;
-use crate::backup::result_error::{WithDebugObjectAndFnName, WithMsg};
+use crate::backup::result_error::{AddDebugObjectAndFnName, AddMsg};
+use std::borrow::Cow;
 use std::fmt::Debug;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-impl<S: Into<String>, O: Debug + Send + 'static, R> WithDebugObjectAndFnName<S, O> for Result<R> {
-    fn with_debug_object_and_fn_name(self, obj: O, fn_name: S) -> Self {
-        self.map_err(|e| e.with_debug_object_and_fn_name(obj, fn_name))
+impl<R> AddDebugObjectAndFnName for Result<R> {
+    fn add_debug_object_and_fn_name<O: Debug, S: AsRef<str>>(self, obj: O, fn_name: S) -> Self {
+        self.map_err(|e| e.add_debug_object_and_fn_name(obj, fn_name))
     }
 }
 
-impl<R, S: Into<String>> WithMsg<S> for Result<R> {
-    fn with_msg(self, msg: S) -> Self {
-        self.map_err(|e| e.with_msg(msg))
+impl<R, S: Into<Cow<'static, str>>> AddMsg<S> for Result<R> {
+    fn add_msg(self, msg: S) -> Self {
+        self.map_err(|e| e.add_msg(msg))
     }
 }
 
@@ -27,26 +28,29 @@ pub fn convert_error_vec(errors: Vec<Error>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backup::result_error::error::ErrorInternal;
 
     #[test]
     fn test_result_with_msg_ok() {
         let result: Result<i32> = Ok(42);
-        let result_with_msg = result.with_msg("This should not affect Ok");
+        let result_with_msg = result.add_msg("This should not affect Ok");
 
         assert_eq!(result_with_msg.unwrap(), 42);
     }
 
     #[test]
     fn test_result_with_msg_err() {
-        let result: Result<i32> = Err(Error::Io(std::io::Error::new(
+        let result: Result<i32> = Err(Error::from(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "test",
         )));
-        let result_with_msg = result.with_msg("Custom message");
+        let result_with_msg = result.add_msg("Custom message");
 
-        match result_with_msg {
-            Err(Error::WithMsg { msg, .. }) => assert_eq!(msg, "Custom message"),
-            _ => panic!("Expected WithMsg error"),
+        if let Err(err_internal) = &result_with_msg {
+            match err_internal.inner() {
+                ErrorInternal::WithMsg { msg, .. } => assert_eq!(msg, "Custom message"),
+                _ => panic!("Expected WithMsg error"),
+            }
         }
     }
 
@@ -54,25 +58,27 @@ mod tests {
     fn test_result_with_debug_object_and_fn_name_ok() {
         let result: Result<i32> = Ok(42);
         let test_obj = "test";
-        let result_with_debug = result.with_debug_object_and_fn_name(test_obj, "test_fn");
+        let result_with_debug = result.add_debug_object_and_fn_name(test_obj, "test_fn");
 
         assert_eq!(result_with_debug.unwrap(), 42);
     }
 
     #[test]
     fn test_result_with_debug_object_and_fn_name_err() {
-        let result: Result<i32> = Err(Error::Io(std::io::Error::new(
+        let result: Result<i32> = Err(Error::from(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "test",
         )));
         let test_obj = "test_object";
-        let result_with_debug = result.with_debug_object_and_fn_name(test_obj, "test_function");
+        let result_with_debug = result.add_debug_object_and_fn_name(test_obj, "test_function");
 
-        match result_with_debug {
-            Err(Error::WithDebugObjAndFnName { fn_name, .. }) => {
-                assert_eq!(fn_name, "test_function")
+        if let Err(err_internal) = &result_with_debug {
+            match err_internal.inner() {
+                ErrorInternal::WithFnName { fn_name, .. } => {
+                    assert_eq!(fn_name, "\"test_object\" test_function()")
+                }
+                _ => panic!("Expected WithDebugObjAndFnName error"),
             }
-            _ => panic!("Expected WithDebugObjAndFnName error"),
         }
     }
 
@@ -86,8 +92,8 @@ mod tests {
     #[test]
     fn test_convert_error_vec_with_errors() {
         let errors = vec![
-            Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "error1")),
-            Error::Io(std::io::Error::new(
+            Error::from(std::io::Error::new(std::io::ErrorKind::NotFound, "error1")),
+            Error::from(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "error2",
             )),
@@ -96,15 +102,17 @@ mod tests {
         let result = convert_error_vec(errors);
         assert!(result.is_err());
 
-        match result {
-            Err(Error::LotsOfError(error_vec)) => assert_eq!(error_vec.len(), 2),
-            _ => panic!("Expected LotsOfError"),
+        if let Err(err_internal) = &result {
+            match err_internal.inner() {
+                ErrorInternal::LotsOfError(error_vec) => assert_eq!(error_vec.len(), 2),
+                _ => panic!("Expected LotsOfError"),
+            }
         }
     }
 
     #[test]
     fn test_convert_error_vec_single_error() {
-        let errors = vec![Error::Io(std::io::Error::new(
+        let errors = vec![Error::from(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "single error",
         ))];
@@ -112,9 +120,11 @@ mod tests {
         let result = convert_error_vec(errors);
         assert!(result.is_err());
 
-        match result {
-            Err(Error::LotsOfError(error_vec)) => assert_eq!(error_vec.len(), 1),
-            _ => panic!("Expected LotsOfError"),
+        if let Err(err_internal) = &result {
+            match err_internal.inner() {
+                ErrorInternal::LotsOfError(error_vec) => assert_eq!(error_vec.len(), 1),
+                _ => panic!("Expected LotsOfError"),
+            }
         }
     }
 
@@ -122,7 +132,7 @@ mod tests {
     fn test_result_type_alias() {
         // Test that our Result type alias works correctly
         let ok_result: Result<String> = Ok("success".to_string());
-        let err_result: Result<String> = Err(Error::Io(std::io::Error::new(
+        let err_result: Result<String> = Err(Error::from(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "test",
         )));
@@ -133,23 +143,25 @@ mod tests {
 
     #[test]
     fn test_chained_error_handling() {
-        let result: Result<i32> = Err(Error::Io(std::io::Error::new(
+        let result: Result<i32> = Err(Error::from(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "original",
         )));
         let result = result
-            .with_msg("First message")
-            .with_debug_object_and_fn_name("test_obj", "test_function");
+            .add_msg("First message")
+            .add_debug_object_and_fn_name("test_obj", "test_function");
 
-        match result {
-            Err(Error::WithDebugObjAndFnName { error, fn_name, .. }) => {
-                assert_eq!(fn_name, "test_function");
-                match error.as_ref() {
-                    Error::WithMsg { msg, .. } => assert_eq!(msg, "First message"),
-                    _ => panic!("Expected WithMsg error inside"),
+        if let Err(err_internal) = &result {
+            match err_internal.inner() {
+                ErrorInternal::WithFnName { error, fn_name, .. } => {
+                    assert_eq!(fn_name, "\"test_obj\" test_function()");
+                    match error.inner() {
+                        ErrorInternal::WithMsg { msg, .. } => assert_eq!(msg, "First message"),
+                        _ => panic!("Expected WithMsg error inside"),
+                    }
                 }
+                _ => panic!("Expected LotsOfError"),
             }
-            _ => panic!("Expected WithDebugObjAndFnName error"),
         }
     }
 }

@@ -4,7 +4,7 @@ use crate::backup::encrypt::age::AgeEncryptorConfig;
 use crate::backup::file_ext::FileExtProvider;
 use crate::backup::finish::Finish;
 use crate::backup::result_error::result::Result;
-use crate::backup::result_error::WithDebugObjectAndFnName;
+use crate::backup::result_error::AddDebugObjectAndFnName;
 use ::age::stream::StreamWriter;
 use derive_more::From;
 use io_enum::Write;
@@ -64,7 +64,7 @@ impl<W: Write> EncryptorBuilder<W> for EncryptorConfig {
                 age.build_encryptor(writer)
             }
         }
-        .with_debug_object_and_fn_name(self.clone(), "build_encryptor")
+        .add_debug_object_and_fn_name(self.clone(), "build_encryptor")
     }
 }
 

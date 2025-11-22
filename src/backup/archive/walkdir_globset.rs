@@ -1,6 +1,6 @@
 use crate::backup::archive::{ArchiveEntry, ArchiveEntryIterable};
 use crate::backup::result_error::error::Error;
-use crate::backup::result_error::WithDebugObjectAndFnName;
+use crate::backup::result_error::AddDebugObjectAndFnName;
 use derive_more::{Display, From, Into};
 use globset::{Glob, GlobBuilder, GlobSetBuilder};
 use serde::de::Visitor;
@@ -93,7 +93,7 @@ impl ArchiveEntryIterable for WalkdirAndGlobsetSource {
                 "Source directory does not exist or is not a directory: {:?}",
                 self.src_dir
             );
-            return Err(Error::Io(std::io::Error::other(
+            return Err(Error::from(std::io::Error::other(
                 "src_dir is not a directory",
             )));
         }
@@ -157,7 +157,7 @@ impl ArchiveEntryIterable for WalkdirAndGlobsetSource {
                 entry
             })
             .map_err(Error::from)
-            .map_err(|e| e.with_debug_object_and_fn_name(self_clone, "archive_entry_iterator"))
+            .add_debug_object_and_fn_name(self_clone, "archive_entry_iterator")
         });
 
         Ok(Box::new(y))

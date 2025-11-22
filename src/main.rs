@@ -1,7 +1,7 @@
 use clap::Parser;
 use k_backup::backup::backup_config::BackupConfig;
 use k_backup::backup::result_error::error::Error;
-use k_backup::backup::result_error::WithMsg;
+use k_backup::backup::result_error::AddMsg;
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
 use std::path::PathBuf;
@@ -36,7 +36,15 @@ struct Args {
 
 fn main() {
     // Initialize structured logging for the application
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_level(true)
+        .with_file(true)
+        .with_line_number(true)
+        .with_thread_names(true)
+        .with_thread_ids(true)
+        .with_target(true)
+        .init();
+    
     let args = Args::parse();
 
     // Create thread pool for parallel operations during backup creation
@@ -50,14 +58,14 @@ fn main() {
         .and_then(|f| {
             serde_yml::from_reader::<_, BackupConfig>(f)
                 .map_err(Error::from)
-                .with_msg(format!("Parse YAML config failed: {:?}", &args.config))
+                .add_msg(format!("Parse YAML config failed: {:?}", &args.config))
         })
         // Validate configuration fields (cron syntax, paths, etc.)
         .and_then(|bc| {
             bc.validate()
                 .map_err(Error::from)
                 .map(|_| bc)
-                .with_msg(format!("Config validation failed: {:?}", &args.config))
+                .add_msg(format!("Config validation failed: {:?}", &args.config))
         })
         // Start the main backup daemon loop
         // This runs forever, checking cron schedule and creating backups

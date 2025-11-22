@@ -29,3 +29,4 @@ rayon = "1.11.0"
 indent = "0.1.1"
 cron-parser = "0.11.0"
 clap = { version = "4.5.16", features = ["derive"] }
+thiserror-ext = "0.3.0"
