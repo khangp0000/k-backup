@@ -7,7 +7,7 @@ use crate::backup::tar;
 use crate::backup::result_error::error::Error;
 use crate::backup::result_error::result::convert_error_vec;
 use crate::backup::result_error::result::Result;
-use crate::backup::result_error::{AddDebugObjectAndFnName, AddMsg};
+use crate::backup::result_error::{AddFunctionName, AddMsg};
 use crate::backup::retention::{ItemWithDateTime, RetentionConfig};
 use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
@@ -18,7 +18,6 @@ use serde_with::skip_serializing_none;
 use std::collections::HashSet;
 use std::fmt::{Debug, Display};
 use std::fs::read_dir;
-
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{sync_channel, Receiver};
@@ -26,6 +25,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use tempfile::NamedTempFile;
 
+use crate::backup::archive::base64::ArcVec;
 use crate::backup::validate::validate_cron_str;
 use crate::backup::validate::validate_valid_archive_base_name;
 use crate::backup::validate::validate_writable_dir;
@@ -50,7 +50,7 @@ pub struct BackupConfig {
 
     /// List of files and directories to include in backups
     #[validate(length(min = 1), nested)]
-    pub files: Vec<ArchiveEntryConfig>,
+    pub files: ArcVec<ArchiveEntryConfig>,
 
     /// Compression configuration
     #[validate(nested)]
@@ -140,11 +140,10 @@ impl BackupConfig {
         pre_process_pool: Arc<ThreadPool>,
     ) -> (JoinHandle<Result<()>>, Receiver<Result<ArchiveEntry>>) {
         let (result_tx, result_rx) = sync_channel(pre_process_pool.current_num_threads());
-        let config_clone = self.clone();
+        let entries_configs = self.files.clone();
         let handle = std::thread::spawn(move || {
             convert_error_vec(pre_process_pool.install(|| {
-                config_clone
-                    .files
+                entries_configs
                     .par_iter()
                     .map(|archive_entry_config| {
                         archive_entry_config.archive_entry_iterator().map(|iter| {
@@ -207,7 +206,7 @@ impl BackupConfig {
             }
             Err(e) => Err(e),
         }
-        .add_debug_object_and_fn_name(self.clone(), "create_write_archive");
+        .add_fn_name("BackupConfig::create_write_archive");
 
         let entry_create_res = entry_handle.join().unwrap();
         match archive_create_res {
@@ -264,7 +263,10 @@ impl BackupConfig {
         );
 
         if let Some(non_fatal_error) = non_fatal_error {
-            tracing::warn!("Non-fatal error during backup: {non_fatal_error}");
+            tracing::warn!(
+                "{}",
+                non_fatal_error.add_msg("Non-fatal error during backup")
+            );
         }
 
         backup_set.insert(Rc::new(ItemWithDateTime::from((file_path, now))));
@@ -293,15 +295,14 @@ impl BackupConfig {
 
         tracing::info!("Found {} existing backup files", set.len());
 
-        let start = set
+        let cron = &self.cron;
+        let mut start = set
             .iter()
-            .map(|i| i.date_time.clone())
+            .map(|i| i.date_time)
             .sorted_unstable()
             .next_back()
-            .unwrap_or(DateTime::UNIX_EPOCH.to_utc().into());
-
-        let cron = &self.cron;
-        let mut start = cron_parser::parse(cron, start.as_ref()).unwrap();
+            .map(|start| cron_parser::parse(cron, &start).unwrap())
+            .unwrap_or_else(|| cron_parser::parse(cron, &DateTime::UNIX_EPOCH.to_utc()).unwrap());
 
         loop {
             let now = Utc::now();
@@ -332,7 +333,7 @@ mod tests {
             cron: "0 1 * * *".to_string(),
             archive_base_name: "test_backup".to_string(),
             out_dir: temp_dir.path().to_path_buf(),
-            files: vec![],
+            files: vec![].into(),
             compressor: CompressorConfig::None,
             encryptor: EncryptorConfig::None,
             retention: None,
@@ -429,7 +430,7 @@ mod tests {
             cron: "invalid cron".to_string(),
             archive_base_name: "test".to_string(),
             out_dir: temp_dir.path().to_path_buf(),
-            files: vec![],
+            files: vec![].into(),
             compressor: CompressorConfig::None,
             encryptor: EncryptorConfig::None,
             retention: None,
@@ -457,7 +458,8 @@ mod tests {
             files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
                 "test content",
                 PathBuf::from("test.txt"),
-            ))],
+            ))]
+            .into(),
             compressor: CompressorConfig::None,
             encryptor: EncryptorConfig::None,
             retention: Some(RetentionConfig {
@@ -513,7 +515,7 @@ mod tests {
         assert_eq!(backup_set.len(), 2); // recent backup + new backup
         let new_backup = backup_set
             .iter()
-            .find(|item| *item.date_time == now)
+            .find(|item| item.date_time == now)
             .expect("New backup should be in set");
         assert!(new_backup.item.exists(), "New backup file should exist");
 
@@ -540,7 +542,8 @@ mod tests {
             files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
                 "test content",
                 PathBuf::from("test.txt"),
-            ))],
+            ))]
+            .into(),
             compressor: CompressorConfig::None,
             encryptor: EncryptorConfig::None,
             retention: Some(RetentionConfig {
@@ -616,7 +619,7 @@ mod tests {
         assert_eq!(backup_set.len(), 3); // old_but_daily_kept + recent + new backup
         let new_backup = backup_set
             .iter()
-            .find(|item| *item.date_time == now)
+            .find(|item| item.date_time == now)
             .expect("New backup should be in set");
         assert!(new_backup.item.exists(), "New backup file should exist");
 
@@ -643,7 +646,8 @@ mod tests {
             files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
                 "test content",
                 PathBuf::from("test.txt"),
-            ))],
+            ))]
+            .into(),
             compressor: CompressorConfig::None,
             encryptor: EncryptorConfig::None,
             retention: Some(RetentionConfig {
@@ -704,7 +708,7 @@ mod tests {
         assert_eq!(backup_set.len(), 3); // 2 old + 1 new = 3 (exactly min_backups)
         let new_backup = backup_set
             .iter()
-            .find(|item| *item.date_time == now)
+            .find(|item| item.date_time == now)
             .expect("New backup should be in set");
         assert!(new_backup.item.exists(), "New backup file should exist");
 
@@ -754,7 +758,8 @@ mod tests {
                     "",
                     vec![txt_glob],
                 )),
-            ],
+            ]
+            .into(),
             compressor: CompressorConfig::Xz(XzConfig::new(6, 2)),
             encryptor: EncryptorConfig::Age(AgeEncryptorConfig::Passphrase {
                 passphrase: RedactedString::new(passphrase),

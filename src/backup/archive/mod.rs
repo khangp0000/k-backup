@@ -6,33 +6,31 @@ use crate::backup::archive::base64::Base64Source;
 use crate::backup::archive::sqlite::SqliteDBSource;
 use crate::backup::archive::walkdir_globset::WalkdirAndGlobsetSource;
 use crate::backup::result_error::result::Result;
-use crate::backup::result_error::AddDebugObjectAndFnName;
 use derive_ctor::ctor;
 use derive_more::From;
-use dyn_iter::DynIter;
+use dyn_iter::{DynIter, IntoDynIterator};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::Path;
-use std::sync::Arc;
 use validator::{Validate, ValidationErrors};
 
 /// Trait combining Read, Send, and Debug for readable sources
-pub trait ReadableSource: Read + Send + std::fmt::Debug {}
+pub trait ReadableSource: Read + Send + std::fmt::Debug + 'static {}
 
 /// Blanket implementation for all types that implement Read + Send + Debug
-impl<T> ReadableSource for T where T: Read + Send + std::fmt::Debug {}
+impl<T> ReadableSource for T where T: Read + Send + std::fmt::Debug + 'static {}
 
 /// Trait combining AsRef<Path>, Send, and Debug for file system paths
-pub trait PathSource: AsRef<Path> + Send + std::fmt::Debug {}
+pub trait PathSource: AsRef<Path> + Send + std::fmt::Debug + 'static {}
 
 /// Blanket implementation for all types that implement AsRef<Path> + Send + Debug
-impl<T> PathSource for T where T: AsRef<Path> + Send + std::fmt::Debug {}
+impl<T> PathSource for T where T: AsRef<Path> + Send + std::fmt::Debug + 'static {}
 
 /// Trait combining AsRef<Path>, Send, and Debug for archive paths
-pub trait ArchivePath: AsRef<Path> + Send + std::fmt::Debug {}
+pub trait ArchivePath: AsRef<Path> + Send + std::fmt::Debug + 'static {}
 
 /// Blanket implementation for all types that implement AsRef<Path> + Send + Debug
-impl<T> ArchivePath for T where T: AsRef<Path> + Send + std::fmt::Debug {}
+impl<T> ArchivePath for T where T: AsRef<Path> + Send + std::fmt::Debug + 'static {}
 
 /// Configuration for different types of backup sources
 ///
@@ -57,7 +55,7 @@ pub enum ArchiveEntryConfig {
     ///
     /// Uses directory walking combined with glob pattern matching to select
     /// files and directories for backup. Supports complex include/exclude patterns.
-    Glob(#[ctor(into)] Arc<WalkdirAndGlobsetSource>),
+    Glob(#[ctor(into)] WalkdirAndGlobsetSource),
 
     /// Base64-encoded content configuration
     ///
@@ -103,13 +101,7 @@ pub struct ArchiveEntry {
 
 impl ArchiveEntry {
     /// Creates a new archive entry with path source
-    fn new_path<
-        A: AsRef<Path> + Send + std::fmt::Debug + 'static,
-        B: AsRef<Path> + Send + std::fmt::Debug + 'static,
-    >(
-        src: A,
-        dst: B,
-    ) -> ArchiveEntry {
+    fn new_path<A: PathSource, B: ArchivePath>(src: A, dst: B) -> ArchiveEntry {
         Self {
             src: ArchiveSource::Path(Box::new(src)),
             dst: Box::new(dst),
@@ -117,25 +109,11 @@ impl ArchiveEntry {
     }
 
     /// Creates a new archive entry with reader source
-    pub fn new_reader<B: AsRef<Path> + Send + std::fmt::Debug + 'static>(
-        src: Box<dyn ReadableSource>,
-        dst: B,
-    ) -> ArchiveEntry {
+    pub fn new_reader<A: ReadableSource, B: ArchivePath>(src: A, dst: B) -> ArchiveEntry {
         Self {
-            src: ArchiveSource::Reader(src),
+            src: ArchiveSource::Reader(Box::new(src)),
             dst: Box::new(dst),
         }
-    }
-
-    /// Creates an archive entry from source and destination paths
-    pub fn new<
-        A: AsRef<Path> + Send + std::fmt::Debug + 'static,
-        B: AsRef<Path> + Send + std::fmt::Debug + 'static,
-    >(
-        src: A,
-        dst: B,
-    ) -> ArchiveEntry {
-        Self::new_path(src, dst)
     }
 }
 
@@ -161,7 +139,7 @@ impl ArchiveEntryIterable for ArchiveEntryConfig {
             ArchiveEntryConfig::Glob(c) => c.archive_entry_iterator(),
             ArchiveEntryConfig::Base64(c) => c.archive_entry_iterator(),
         }
-        .add_debug_object_and_fn_name(self, "archive_entry_iterator")
+        .or_else(|e| Ok(std::iter::once(Err(e)).into_dyn_iter()))
     }
 }
 
@@ -175,7 +153,7 @@ mod tests {
         let src = PathBuf::from("/source/file.txt");
         let dst = PathBuf::from("backup/file.txt");
 
-        let entry = ArchiveEntry::new(src.clone(), dst.clone());
+        let entry = ArchiveEntry::new_path(src.clone(), dst.clone());
         if let ArchiveSource::Path(path) = &entry.src {
             assert_eq!(path.as_ref().as_ref(), src.as_path());
         } else {
@@ -198,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_archive_entry_debug() {
-        let entry = ArchiveEntry::new(PathBuf::from("/src"), PathBuf::from("dst"));
+        let entry = ArchiveEntry::new_path(PathBuf::from("/src"), PathBuf::from("dst"));
         let debug_str = format!("{:?}", entry);
         assert_eq!(
             debug_str,

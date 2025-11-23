@@ -4,10 +4,11 @@ use crate::backup::encrypt::age::AgeEncryptorConfig;
 use crate::backup::file_ext::FileExtProvider;
 use crate::backup::finish::Finish;
 use crate::backup::result_error::result::Result;
-use crate::backup::result_error::AddDebugObjectAndFnName;
+use crate::backup::result_error::AddFunctionName;
 use ::age::stream::StreamWriter;
 use derive_ctor::ctor;
 use derive_more::From;
+use function_name::named;
 use io_enum::Write;
 use serde::{Deserialize, Serialize};
 use std::io::{Error, Write};
@@ -55,6 +56,7 @@ impl<W: Write> Finish<W> for Encryptor<W> {
 }
 
 impl<W: Write> EncryptorBuilder<W> for EncryptorConfig {
+    #[named]
     fn build_encryptor(&self, writer: W) -> Result<Encryptor<W>> {
         match self {
             EncryptorConfig::None => {
@@ -66,7 +68,7 @@ impl<W: Write> EncryptorBuilder<W> for EncryptorConfig {
                 age.build_encryptor(writer)
             }
         }
-        .add_debug_object_and_fn_name(self.clone(), "build_encryptor")
+        .add_fn_name(function_name!())
     }
 }
 

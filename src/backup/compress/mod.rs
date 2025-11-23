@@ -2,10 +2,12 @@ pub mod xz;
 
 use crate::backup::file_ext::FileExtProvider;
 use crate::backup::finish::Finish;
+use crate::backup::function_path;
 use crate::backup::result_error::result::Result;
-use crate::backup::result_error::AddDebugObjectAndFnName;
+use crate::backup::result_error::AddFunctionName;
 use derive_ctor::ctor;
 use derive_more::From;
+use function_name::named;
 use io_enum::Write;
 use liblzma::write::XzEncoder;
 use serde::{Deserialize, Serialize};
@@ -56,6 +58,7 @@ impl<W: Write> Finish<W> for Compressor<W> {
 }
 
 impl<W: Write> CompressorBuilder<W> for CompressorConfig {
+    #[named]
     fn build_compressor(&self, writer: W) -> Result<Compressor<W>> {
         match self {
             CompressorConfig::None => {
@@ -67,7 +70,7 @@ impl<W: Write> CompressorBuilder<W> for CompressorConfig {
                 xz.build_compressor(writer)
             }
         }
-        .add_debug_object_and_fn_name(self.clone(), "build_compressor")
+        .add_fn_name(function_path!())
     }
 }
 

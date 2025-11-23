@@ -1,7 +1,7 @@
 use crate::backup::archive::{ArchiveEntry, ArchiveEntryIterable};
 use crate::backup::result_error::result::Result;
 use derive_ctor::ctor;
-use derive_more::From;
+use derive_more::{Deref, DerefMut, From};
 use dyn_iter::{DynIter, IntoDynIterator};
 use serde::{Deserialize, Serialize};
 use serde_with::base64::Base64;
@@ -10,7 +10,7 @@ use std::io::Cursor;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
-use validator::Validate;
+use validator::{Validate, ValidateLength};
 
 /// Base64-encoded content source for archive entries
 ///
@@ -30,12 +30,34 @@ pub struct Base64Source {
     dst: PathBuf,
 }
 
-#[derive(From, Clone, Debug, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq, ctor)]
+#[derive(
+    From,
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    Ord,
+    PartialOrd,
+    Eq,
+    PartialEq,
+    ctor,
+    Validate,
+    Deref,
+    DerefMut,
+)]
 #[ctor(pub new)]
-struct ArcVec<T> {
+#[serde(transparent)]
+pub struct ArcVec<T> {
     #[ctor(into)]
     inner: Arc<Vec<T>>,
 }
+
+impl<T> ValidateLength<usize> for ArcVec<T> {
+    fn length(&self) -> Option<usize> {
+        Some(self.inner.len())
+    }
+}
+
 impl<T> AsRef<[T]> for ArcVec<T> {
     fn as_ref(&self) -> &[T] {
         self.inner.deref().as_ref()
@@ -80,7 +102,7 @@ impl<T> From<Vec<T>> for ArcVec<T> {
 
 impl ArchiveEntryIterable for Base64Source {
     fn archive_entry_iterator<'a>(&self) -> Result<DynIter<'a, Result<ArchiveEntry>>> {
-        let reader = Box::new(Cursor::new(self.content.clone()));
+        let reader = Cursor::new(self.content.clone());
         let entry = ArchiveEntry::new_reader(reader, self.dst.clone());
 
         Ok(std::iter::once(Ok(entry)).into_dyn_iter())

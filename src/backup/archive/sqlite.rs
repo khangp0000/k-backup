@@ -1,9 +1,11 @@
 use crate::backup::archive::{ArchiveEntry, ArchiveEntryIterable};
+use crate::backup::function_path;
 use crate::backup::result_error::result::Result;
-use crate::backup::result_error::AddDebugObjectAndFnName;
+use crate::backup::result_error::AddFunctionName;
 use crate::backup::validate::validate_sql_file;
 use derive_ctor::ctor;
 use dyn_iter::{DynIter, IntoDynIterator};
+use function_name::named;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -61,7 +63,7 @@ impl SqliteDBSource {
             temp_file.path(),
             self.dst
         );
-        Ok(ArchiveEntry::new(temp_file, self.dst.clone()))
+        Ok(ArchiveEntry::new_path(temp_file, self.dst.clone()))
     }
 }
 
@@ -75,12 +77,12 @@ impl ArchiveEntryIterable for SqliteDBSource {
     /// 4. Returns an ArchiveEntry that will delete the temp file after backup
     ///
     /// The temporary file is marked for deletion after being added to the archive.
+    #[named]
     fn archive_entry_iterator<'a>(&self) -> Result<DynIter<'a, Result<ArchiveEntry>>> {
-        Ok(std::iter::once(
-            self.create_archive_entry()
-                .add_debug_object_and_fn_name(self, "archive_entry_iterator"),
+        Ok(
+            std::iter::once(self.create_archive_entry().add_fn_name(function_path!()))
+                .into_dyn_iter(),
         )
-        .into_dyn_iter())
     }
 }
 

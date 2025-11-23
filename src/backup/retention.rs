@@ -1,10 +1,7 @@
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use std::cmp::Reverse;
 use std::fmt::Debug;
-use std::rc::Rc;
 use validator::Validate;
 
 fn default_min_backups() -> usize {
@@ -105,10 +102,10 @@ impl RetentionConfig {
             .map(Result::unwrap);
         let mut last_keep = None;
 
-        let all_items: Vec<_> = iter
-            .into_iter()
-            .sorted_unstable_by_key(|r| Reverse(r.as_ref().date_time.clone()))
-            .collect();
+        let mut all_items: Vec<_> = iter.into_iter().collect::<Vec<_>>();
+
+        // Decrease time sorting
+        all_items.sort_by(|a, b| b.as_ref().date_time.cmp(&a.as_ref().date_time));
 
         tracing::info!(
             "Evaluating retention policy for {} backups at {}",
@@ -213,12 +210,12 @@ fn should_keep<O: Copy, T: TimeZone<Offset = O>, R: Ord, F: Fn(&DateTime<T>) -> 
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub struct ItemWithDateTime<R, T: TimeZone = Utc> {
     pub item: R,
-    pub date_time: Rc<DateTime<T>>,
+    pub date_time: DateTime<T>,
 }
 
 impl<T: TimeZone> ItemWithDateTime<(), T> {
-    fn new<D: Into<Rc<DateTime<T>>>>(date_time: D) -> Self {
-        Self::from(((), date_time.into()))
+    fn new<D: Into<DateTime<T>>>(date_time: D) -> Self {
+        Self::from(((), date_time))
     }
 }
 
@@ -228,7 +225,7 @@ impl<T: TimeZone> From<DateTime<T>> for ItemWithDateTime<(), T> {
     }
 }
 
-impl<R, T: TimeZone, D: Into<Rc<DateTime<T>>>> From<(R, D)> for ItemWithDateTime<R, T> {
+impl<R, T: TimeZone, D: Into<DateTime<T>>> From<(R, D)> for ItemWithDateTime<R, T> {
     fn from(value: (R, D)) -> Self {
         Self {
             item: value.0,
@@ -283,11 +280,11 @@ mod tests {
         let old_backups: Vec<_> = (0..5)
             .map(|i| {
                 let dt = now - Duration::days(i + 10); // All very old
-                ItemWithDateTime::from((format!("backup_{}", i), dt))
+                <ItemWithDateTime<_, Utc>>::from((format!("backup_{}", i), dt))
             })
             .collect();
 
-        let to_delete = config.get_delete(old_backups.iter(), now);
+        let to_delete = config.get_delete(old_backups, now);
 
         // Should only delete 2 backups (5 total - 3 min_backups)
         assert_eq!(to_delete.len(), 2);
@@ -305,8 +302,8 @@ mod tests {
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
         let backups = [
-            ItemWithDateTime::from(("recent", now - Duration::days(3))),
-            ItemWithDateTime::from(("old", now - Duration::days(10))),
+            <ItemWithDateTime<_, Utc>>::from(("recent", now - Duration::days(3))),
+            <ItemWithDateTime<_, Utc>>::from(("old", now - Duration::days(10))),
         ];
 
         let to_delete = config.get_delete(backups.iter(), now);
@@ -328,10 +325,16 @@ mod tests {
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
         let backups = [
-            ItemWithDateTime::from(("day5_backup1", now - Duration::days(5) - Duration::hours(2))),
-            ItemWithDateTime::from(("day5_backup2", now - Duration::days(5) - Duration::hours(1))),
+            <ItemWithDateTime<_, Utc>>::from((
+                "day5_backup1",
+                now - Duration::days(5) - Duration::hours(2),
+            )),
+            <ItemWithDateTime<_, Utc>>::from((
+                "day5_backup2",
+                now - Duration::days(5) - Duration::hours(1),
+            )),
             // One backup from 10 days ago (outside daily retention)
-            ItemWithDateTime::from(("day10_backup", now - Duration::days(10))),
+            <ItemWithDateTime<_, Utc>>::from(("day10_backup", now - Duration::days(10))),
         ];
 
         let to_delete = config.get_delete(backups.iter(), now);
@@ -352,10 +355,10 @@ mod tests {
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
         let backups = [
-            ItemWithDateTime::from(("month1_backup1", now - Duration::days(30))),
-            ItemWithDateTime::from(("month1_backup2", now - Duration::days(35))),
+            <ItemWithDateTime<_, Utc>>::from(("month1_backup1", now - Duration::days(30))),
+            <ItemWithDateTime<_, Utc>>::from(("month1_backup2", now - Duration::days(35))),
             // One backup from 120 days ago (outside monthly retention)
-            ItemWithDateTime::from(("old_backup", now - Duration::days(120))),
+            <ItemWithDateTime<_, Utc>>::from(("old_backup", now - Duration::days(120))),
         ];
 
         let to_delete = config.get_delete(backups.iter(), now);
@@ -376,10 +379,10 @@ mod tests {
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
         let backups = [
-            ItemWithDateTime::from(("year1_backup1", now - Duration::days(365))),
-            ItemWithDateTime::from(("year1_backup2", now - Duration::days(370))),
+            <ItemWithDateTime<_, Utc>>::from(("year1_backup1", now - Duration::days(365))),
+            <ItemWithDateTime<_, Utc>>::from(("year1_backup2", now - Duration::days(370))),
             // One backup from 4 years ago (outside yearly retention)
-            ItemWithDateTime::from(("old_backup", now - Duration::days(4 * 365))),
+            <ItemWithDateTime<_, Utc>>::from(("old_backup", now - Duration::days(4 * 365))),
         ];
 
         let to_delete = config.get_delete(backups.iter(), now);
@@ -394,11 +397,11 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
 
         let backups = [
-            ItemWithDateTime::from(("recent1", now - Duration::days(1))),
-            ItemWithDateTime::from(("recent2", now - Duration::days(2))),
+            <ItemWithDateTime<_, Utc>>::from(("recent1", now - Duration::days(1))),
+            <ItemWithDateTime<_, Utc>>::from(("recent2", now - Duration::days(2))),
             // Daily retention candidates
-            ItemWithDateTime::from(("daily1", now - Duration::days(15))),
-            ItemWithDateTime::from(("daily2", now - Duration::days(16))), // Same day, should be deleted
+            <ItemWithDateTime<_, Utc>>::from(("daily1", now - Duration::days(15))),
+            <ItemWithDateTime<_, Utc>>::from(("daily2", now - Duration::days(16))), // Same day, should be deleted
             // Monthly retention candidates
             ItemWithDateTime::from(("monthly1", now - Duration::days(60))),
             ItemWithDateTime::from(("monthly2", now - Duration::days(65))), // Same month, should be deleted
@@ -430,19 +433,19 @@ mod tests {
 
         // Test From<DateTime<T>>
         let item1: ItemWithDateTime<(), Utc> = now.into();
-        assert_eq!(*item1.date_time, now);
+        assert_eq!(item1.date_time, now);
 
         // Test From<(R, DateTime<T>)>
         let item2: ItemWithDateTime<String, Utc> = ("test".to_string(), now).into();
         assert_eq!(item2.item, "test");
-        assert_eq!(*item2.date_time, now);
+        assert_eq!(item2.date_time, now);
     }
 
     #[test]
     fn test_item_with_datetime_equality() {
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
-        let item1 = ItemWithDateTime::from(("test", now));
-        let item2 = ItemWithDateTime::from(("test", now));
+        let item1 = <ItemWithDateTime<_, Utc>>::from(("test", now));
+        let item2 = <ItemWithDateTime<_, Utc>>::from(("test", now));
 
         assert_eq!(item1, item2);
     }

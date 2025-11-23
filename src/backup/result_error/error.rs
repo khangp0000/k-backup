@@ -1,4 +1,4 @@
-use crate::backup::result_error::{AddDebugObjectAndFnName, AddMsg};
+use crate::backup::result_error::{AddFunctionName, AddMsg};
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::sync::mpsc::SendError;
@@ -8,11 +8,12 @@ use thiserror_ext;
 #[derive(Error, Debug, thiserror_ext::Box, thiserror_ext::Construct)]
 #[thiserror_ext(
     newtype(name = Error),
-    macro(path = "crate::foo"),
 )]
 pub enum ErrorInternal {
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    StripPrefixError(#[from] std::path::StripPrefixError),
     #[error(transparent)]
     Rusqlite(#[from] rusqlite::Error),
     #[error(transparent)]
@@ -32,7 +33,7 @@ pub enum ErrorInternal {
         msg: Cow<'static, str>,
         error: Error,
     },
-    #[error("{} failed:\n{}", fn_name, indent::indent_all_with("  ", error.to_string()))]
+    #[error("{}() failed:\n{}", fn_name, indent::indent_all_with("  ", error.to_string()))]
     WithFnName {
         fn_name: Cow<'static, str>,
         error: Error,
@@ -41,9 +42,9 @@ pub enum ErrorInternal {
     LotsOfError(Vec<Error>),
 }
 
-impl AddDebugObjectAndFnName for Error {
-    fn add_debug_object_and_fn_name<O: Debug, S: AsRef<str>>(self, obj: O, fn_name: S) -> Self {
-        Error::with_fn_name(format!("{:?} {}()", obj, fn_name.as_ref()), self)
+impl AddFunctionName for Error {
+    fn add_fn_name<S: Into<Cow<'static, str>>>(self, fn_name: S) -> Self {
+        Error::with_fn_name(fn_name.into(), self)
     }
 }
 
@@ -91,7 +92,6 @@ impl Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ops::Deref;
     use std::sync::mpsc;
 
     #[test]
@@ -114,21 +114,6 @@ mod tests {
         match error_with_msg.inner() {
             ErrorInternal::WithMsg { msg, .. } => assert_eq!(msg, "Custom message"),
             _ => panic!("Expected WithMsg error"),
-        }
-    }
-
-    #[test]
-    fn test_error_with_debug_object_and_fn_name() {
-        let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-        let error = Error::from(io_error);
-        let test_obj = "test_object";
-        let error_with_debug = error.add_debug_object_and_fn_name(test_obj, "test_function");
-
-        match error_with_debug.inner() {
-            ErrorInternal::WithFnName { fn_name, .. } => {
-                assert_eq!(fn_name.deref(), "\"test_object\" test_function()")
-            }
-            _ => panic!("Expected WithDebugObjAndFnName error"),
         }
     }
 
@@ -228,15 +213,5 @@ mod tests {
         let error_with_msg = error.add_msg("Operation failed");
         let error_str = error_with_msg.to_string();
         assert_eq!(error_str, "Operation failed:\n  file not found");
-    }
-
-    #[test]
-    fn test_error_with_debug_display() {
-        let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-        let error = Error::from(io_error);
-        let test_obj = 42;
-        let error_with_debug = error.add_debug_object_and_fn_name(test_obj, "test_function");
-        let error_str = error_with_debug.to_string();
-        assert_eq!(error_str, "42 test_function() failed:\n  file not found");
     }
 }

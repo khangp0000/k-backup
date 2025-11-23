@@ -8,3 +8,11 @@ pub mod result_error;
 pub mod retention;
 pub mod tar;
 pub mod validate;
+
+macro_rules! function_path {
+    () => {
+        concat!(module_path!(), "::", function_name!(), " ", file!(), ":", line!())
+    };
+}
+
+pub(crate) use function_path;

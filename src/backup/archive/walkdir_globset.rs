@@ -1,19 +1,21 @@
 use crate::backup::archive::{ArchiveEntry, ArchiveEntryIterable};
+use crate::backup::function_path;
 use crate::backup::result_error::error::Error;
 use crate::backup::result_error::result::Result;
-use crate::backup::result_error::AddDebugObjectAndFnName;
+use crate::backup::result_error::AddFunctionName;
+use crate::backup::result_error::AddMsg;
 use crate::backup::validate::validate_dir_exist;
 use derive_ctor::ctor;
 use derive_more::{Display, From};
 use dyn_iter::{DynIter, IntoDynIterator};
-use globset::{Glob, GlobBuilder, GlobSetBuilder};
+use function_name::named;
+use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::{Debug, Formatter};
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use validator::Validate;
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
@@ -80,7 +82,8 @@ impl<'de> Deserialize<'de> for CustomDeserializedGlob {
     }
 }
 
-impl ArchiveEntryIterable for Arc<WalkdirAndGlobsetSource> {
+impl ArchiveEntryIterable for WalkdirAndGlobsetSource {
+    #[named]
     fn archive_entry_iterator<'a>(&self) -> Result<DynIter<'a, Result<ArchiveEntry>>> {
         if !self.src_dir.is_dir() {
             tracing::error!(
@@ -112,46 +115,56 @@ impl ArchiveEntryIterable for Arc<WalkdirAndGlobsetSource> {
         }
 
         let globset = globset.build().unwrap();
-        let src_dir_clone_1 = self.src_dir.clone();
-        let src_dir_clone_2 = self.src_dir.clone();
-        let dst_dir = self.dst_dir.clone();
+        let src_dir = self.src_dir.to_path_buf();
+        let dst_dir = self.dst_dir.to_path_buf();
 
-        let entries: Vec<_> = WalkDir::new(&self.src_dir)
+        let entries = WalkDir::new(&self.src_dir)
             .follow_links(true)
             .into_iter()
-            .filter(move |res| match res {
-                Ok(de) => {
-                    let p = de.path();
-                    p.is_file()
-                        && p.strip_prefix(&src_dir_clone_1)
-                            .map(|p| globset.is_match(p))
-                            .unwrap_or(false)
-                }
-                Err(_) => true,
+            .filter_map(move |res| match res {
+                Ok(de) => process_dir_entry(de, &src_dir, &dst_dir, &globset),
+                Err(e) => Some(Err(e.into())),
             })
-            .collect();
+            .map(move |res| res.add_fn_name(function_path!()));
 
-        tracing::info!(
-            "Directory scan completed: {} files matched glob patterns",
-            entries.len()
-        );
-
-        let self_clone = self.clone();
-        let y = entries.into_iter().map(move |res| {
-            res.map(|de| {
-                let entry = ArchiveEntry::new(
-                    de.path().to_path_buf(),
-                    dst_dir.join(de.path().strip_prefix(&src_dir_clone_2).unwrap()),
-                );
-                tracing::trace!("Including file: {:?} -> {:?}", entry.src, entry.dst);
-                entry
-            })
-            .map_err(Error::from)
-            .add_debug_object_and_fn_name(self_clone.clone(), "archive_entry_iterator")
-        });
-
-        Ok(y.into_dyn_iter())
+        Ok(entries.into_dyn_iter())
     }
+}
+
+fn process_dir_entry<P1: AsRef<Path>, P2: AsRef<Path>>(
+    de: DirEntry,
+    base_src_dir: P1,
+    base_dst_dir: P2,
+    globset: &GlobSet,
+) -> Option<Result<ArchiveEntry>> {
+    let p = de.into_path();
+    let res = if p.is_file() {
+        tracing::debug!("Checking glob path {:?}", p);
+        match p.strip_prefix(base_src_dir.as_ref()) {
+            Ok(stripped_path) => {
+                if globset.is_match(stripped_path) {
+                    Ok(base_dst_dir.as_ref().join(stripped_path))
+                } else {
+                    tracing::trace!("Skipping {:?}, glob not match", p);
+                    return None;
+                }
+            }
+            Err(e) => Err(Error::from(e).add_msg(format!(
+                "Stripping {:?} from {:?} failed",
+                base_src_dir.as_ref(),
+                p
+            ))),
+        }
+    } else {
+        tracing::trace!("Skipping {:?} not a file", p);
+        return None;
+    };
+
+    Some(res.map(|dst| {
+        let entry = ArchiveEntry::new_path(p, dst);
+        tracing::trace!("Including file: {:?} -> {:?}", entry.src, entry.dst);
+        entry
+    }))
 }
 
 #[cfg(test)]
@@ -227,7 +240,7 @@ mod tests {
 
         let source = WalkdirAndGlobsetSource::new(temp_dir.path(), "backup", vec![]);
 
-        let iterator = Arc::from(source).archive_entry_iterator().unwrap();
+        let iterator = source.archive_entry_iterator().unwrap();
         let entries: Vec<_> = iterator.collect();
 
         // Should find all files
@@ -254,7 +267,7 @@ mod tests {
         let txt_glob = serde_json::from_str("\"**/*.txt\"").unwrap();
         let source = WalkdirAndGlobsetSource::new(temp_dir.path(), "backup", vec![txt_glob]);
 
-        let iterator = Arc::from(source).archive_entry_iterator().unwrap();
+        let iterator = source.archive_entry_iterator().unwrap();
         let entries: Vec<_> = iterator.collect();
 
         // Should find only .txt files
@@ -282,7 +295,7 @@ mod tests {
         let source =
             WalkdirAndGlobsetSource::new(temp_dir.path(), "backup", vec![txt_glob, json_glob]);
 
-        let iterator = Arc::from(source).archive_entry_iterator().unwrap();
+        let iterator = source.archive_entry_iterator().unwrap();
         let entries: Vec<_> = iterator.collect();
 
         // Should find .txt and .json files
@@ -307,7 +320,7 @@ mod tests {
 
         let source = WalkdirAndGlobsetSource::new(temp_dir.path(), "backup", vec![]);
 
-        let iterator = Arc::from(source).archive_entry_iterator().unwrap();
+        let iterator = source.archive_entry_iterator().unwrap();
         let entries: Vec<_> = iterator.collect();
 
         // Should find all files (using default glob)
@@ -318,7 +331,7 @@ mod tests {
     fn test_archive_entry_iterator_with_nonexistent_directory() {
         let source = WalkdirAndGlobsetSource::new("/nonexistent/directory", "backup", vec![]);
 
-        let result = Arc::from(source).archive_entry_iterator();
+        let result = source.archive_entry_iterator();
         assert!(result.is_err());
     }
 
@@ -330,7 +343,7 @@ mod tests {
 
         let source = WalkdirAndGlobsetSource::new(file_path, "backup", vec![]);
 
-        let result = Arc::from(source).archive_entry_iterator();
+        let result = source.archive_entry_iterator();
         assert!(result.is_err());
     }
 
