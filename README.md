@@ -15,12 +15,14 @@ For enterprise environments, consider established solutions like Veeam, Bacula, 
 
 ## Features
 
-- **Scheduled Backups**: Cron-based automation
-- **Multiple Sources**: SQLite databases and file/directory patterns  
-- **Compression**: XZ (LZMA) with parallel processing
+- **Scheduled Backups**: Cron-based automation with UTC scheduling
+- **Multiple Sources**: SQLite databases, file/directory patterns, and base64 content
+- **Compression**: XZ (LZMA) with configurable levels and parallel processing
 - **Encryption**: Age encryption with passphrase support
-- **Retention Management**: Configurable policies with grandfather-father-son rotation
-- **Parallel Processing**: Multi-threaded operations for performance
+- **Retention Management**: Sophisticated grandfather-father-son rotation with safety nets
+- **Email Notifications**: SMTP notifications for backup failures and errors
+- **Parallel Processing**: Multi-threaded operations for optimal performance
+- **Robust Error Handling**: Non-fatal errors don't stop backups, comprehensive logging
 
 ## Quick Start
 
@@ -43,6 +45,17 @@ For enterprise environments, consider established solutions like Veeam, Bacula, 
        globset:
          - "**/*.txt"
          - "**/*.json"
+     - type: base64
+       content: "SGVsbG8gSSBsb3ZlIHU="
+       dst: test.txt
+   notifications:
+     - type: smtp
+       host: smtp.example.com
+       smtp_mode: Ssl
+       from: admin@example.com
+       to: ["you@example.com"]
+       username: username
+       password: password
    encryptor:
      encryptor_type: age
      secret_type: passphrase
@@ -56,11 +69,17 @@ For enterprise environments, consider established solutions like Veeam, Bacula, 
      daily_retention: 30days
      monthly_retention: 12months
      yearly_retention: 5years
+     min_backups: 3  # safety net
    ```
 
 3. **Run the backup daemon**:
    ```bash
    ./target/release/k_backup --config config.yml
+   ```
+
+   Or with debug logging:
+   ```bash
+   RUST_LOG=debug ./target/release/k_backup --config config.yml
    ```
 
 ## Configuration
@@ -94,6 +113,14 @@ Uses SQLite's backup API for consistent snapshots even during active use.
     - "config/**/*"
 ```
 
+#### Base64 Content
+```yaml
+- type: base64
+  content: "SGVsbG8gSSBsb3ZlIHU="  # "Hello I love u" in base64
+  dst: message.txt
+```
+Useful for including small configuration files or secrets directly in the backup.
+
 ### Compression
 ```yaml
 compressor:
@@ -112,6 +139,20 @@ encryptor:
 
 **Security Note**: Passphrases are stored in plain text in config files. Consider using proper file permissions (600) and secure storage. Yes, this isn't ideal, but it's simple.
 
+### Email Notifications
+```yaml
+notifications:
+  - type: smtp
+    host: smtp.gmail.com
+    smtp_mode: Ssl          # or StartTls
+    from: backup@example.com
+    to: ["admin@example.com", "ops@example.com"]
+    username: backup@example.com
+    password: app-password
+```
+
+Sends email notifications when backup errors occur (non-fatal errors that don't stop the backup process).
+
 ### Retention Policies
 ```yaml
 retention:
@@ -119,9 +160,14 @@ retention:
   daily_retention: 30days       # Keep one backup per day for 30 days
   monthly_retention: 12months   # Keep one backup per month for 12 months
   yearly_retention: 5years      # Keep one backup per year for 5 years
+  min_backups: 3               # Safety net - always keep at least this many
 ```
 
-Implements grandfather-father-son rotation: newer backups in each category are preserved even if they exceed the default retention period.
+Implements sophisticated grandfather-father-son rotation:
+- **Default retention**: Base policy applied to all backups
+- **Daily/Monthly/Yearly**: Preserves the most recent backup from each time period
+- **Safety net**: `min_backups` prevents accidental deletion of all backups
+- **Smart cleanup**: Only deletes backups that don't violate any retention rule
 
 ## How It Works
 
@@ -147,6 +193,14 @@ files:
       - "Documents/**/*"
       - "Pictures/**/*"
       - ".ssh/**/*"
+notifications:
+  - type: smtp
+    host: smtp.gmail.com
+    smtp_mode: Ssl
+    from: backup@example.com
+    to: ["user@example.com"]
+    username: backup@example.com
+    password: app-password
 encryptor:
   encryptor_type: age
   secret_type: passphrase
@@ -156,6 +210,7 @@ compressor:
 retention:
   default_retention: 30days
   monthly_retention: 12months
+  min_backups: 5
 ```
 
 ### Server Application Backup
@@ -173,6 +228,17 @@ files:
       - "uploads/**/*"
       - "config/**/*"
       - "logs/*.log"
+  - type: base64
+    content: "$(cat /etc/app/secret.key | base64 -w 0)"
+    dst: secret.key
+notifications:
+  - type: smtp
+    host: smtp.company.com
+    smtp_mode: StartTls
+    from: server-backup@company.com
+    to: ["ops@company.com", "admin@company.com"]
+    username: server-backup@company.com
+    password: secure-smtp-password
 encryptor:
   encryptor_type: age
   secret_type: passphrase
@@ -180,20 +246,23 @@ encryptor:
 compressor:
   compressor_type: xz
   level: 9
+  thread: 8
 retention:
   default_retention: 7days
   daily_retention: 30days
   monthly_retention: 12months
   yearly_retention: 7years
+  min_backups: 10
 ```
 
 ## Known Limitations
 
 - **UTC scheduling only** - Cron expressions run in UTC time (because timezones are hard)
 - **Passphrase-only encryption** - Key file support not yet implemented
-- **Error handling** - Some errors may cause the daemon to exit
-- **No progress indicators** - Runs silently in background
+- **SMTP notifications only** - Other notification methods not yet supported
+- **No progress indicators** - Runs silently in background (check logs for details)
 - **Single instance** - No protection against multiple concurrent runs
+- **File permissions** - Backup process runs with current user permissions
 
 ## Troubleshooting
 
@@ -202,7 +271,9 @@ retention:
 1. **Permission denied**: Ensure read access to source files and write access to output directory
 2. **Disk space**: Monitor backup directory; adjust retention policies as needed
 3. **Time zone confusion**: Remember all schedules are UTC-based
-4. **Process crashes**: Check logs and restart the daemon
+4. **SMTP authentication**: Use app passwords for Gmail, check SMTP settings
+5. **SQLite database locked**: Tool handles this gracefully using SQLite backup API
+6. **Non-fatal errors**: Check email notifications and logs for file access issues
 
 ### Debugging
 Enable detailed logging:
@@ -210,13 +281,25 @@ Enable detailed logging:
 RUST_LOG=debug ./k_backup --config config.yml
 ```
 
+For trace-level logging (very verbose):
+```bash
+RUST_LOG=trace ./k_backup --config config.yml
+```
+
+Log levels available: `error`, `warn`, `info`, `debug`, `trace`
+
 ## Best Practices
 
 - **Test your configuration** with a small dataset first
-- **Verify backup integrity** by testing restore procedures
+- **Verify backup integrity** by testing restore procedures regularly
 - **Monitor disk space** in your backup directory
-- **Use appropriate file permissions** (600) for config files
+- **Use appropriate file permissions** (600) for config files containing passwords
+- **Set up email notifications** to catch backup issues early
+- **Use strong passphrases** for encryption (consider using a password manager)
+- **Test retention policies** to ensure they work as expected
 - **Follow the 3-2-1 rule**: 3 copies, 2 different media, 1 offsite
+- **Monitor logs** regularly for warnings and errors
+- **Keep multiple backup strategies** - don't rely solely on k-backup
 
 ## License
 
@@ -225,3 +308,8 @@ This project is licensed under the GNU General Public License v3.0 - see the LIC
 ---
 
 *Built with Rust for reliable automated backups (it works on my machine™)*
+
+## Version History
+
+- **v2.0.0**: Major refactor with builder patterns, email notifications, improved error handling, and comprehensive documentation
+- **v1.x**: Initial releases with basic backup functionality
