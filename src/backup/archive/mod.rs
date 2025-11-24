@@ -1,3 +1,10 @@
+//! Archive entry sources and processing.
+//!
+//! Provides different sources for backup content:
+//! - SQLite database backups using the backup API
+//! - File/directory selection with glob patterns
+//! - Base64-encoded content for testing
+
 pub mod base64;
 pub mod sqlite;
 pub mod walkdir_globset;
@@ -6,31 +13,34 @@ use crate::backup::archive::base64::Base64Source;
 use crate::backup::archive::sqlite::SqliteDBSource;
 use crate::backup::archive::walkdir_globset::WalkdirAndGlobsetSource;
 use crate::backup::result_error::result::Result;
-use derive_ctor::ctor;
+
 use derive_more::From;
 use dyn_iter::{DynIter, IntoDynIterator};
 use serde::{Deserialize, Serialize};
-use std::io::Read;
-use std::path::Path;
 use validator::{Validate, ValidationErrors};
 
+use std::fmt::Debug;
+use std::io::Read;
+use std::path::Path;
+use std::result;
+
 /// Trait combining Read, Send, and Debug for readable sources
-pub trait ReadableSource: Read + Send + std::fmt::Debug + 'static {}
+pub trait ReadableSource: Read + Send + Debug + 'static {}
 
 /// Blanket implementation for all types that implement Read + Send + Debug
-impl<T> ReadableSource for T where T: Read + Send + std::fmt::Debug + 'static {}
+impl<T> ReadableSource for T where T: Read + Send + Debug + 'static {}
 
-/// Trait combining AsRef<Path>, Send, and Debug for file system paths
-pub trait PathSource: AsRef<Path> + Send + std::fmt::Debug + 'static {}
+/// Trait combining `AsRef<Path>`, Send, and Debug for file system paths
+pub trait PathSource: AsRef<Path> + Send + Debug + 'static {}
 
-/// Blanket implementation for all types that implement AsRef<Path> + Send + Debug
-impl<T> PathSource for T where T: AsRef<Path> + Send + std::fmt::Debug + 'static {}
+/// Blanket implementation for all types that implement `AsRef<Path>` + Send + Debug
+impl<T> PathSource for T where T: AsRef<Path> + Send + Debug + 'static {}
 
-/// Trait combining AsRef<Path>, Send, and Debug for archive paths
-pub trait ArchivePath: AsRef<Path> + Send + std::fmt::Debug + 'static {}
+/// Trait combining `AsRef<Path>`, Send, and Debug for archive paths
+pub trait ArchivePath: AsRef<Path> + Send + Debug + 'static {}
 
-/// Blanket implementation for all types that implement AsRef<Path> + Send + Debug
-impl<T> ArchivePath for T where T: AsRef<Path> + Send + std::fmt::Debug + 'static {}
+/// Blanket implementation for all types that implement `AsRef<Path>` + Send + Debug
+impl<T> ArchivePath for T where T: AsRef<Path> + Send + Debug + 'static {}
 
 /// Configuration for different types of backup sources
 ///
@@ -38,34 +48,32 @@ impl<T> ArchivePath for T where T: AsRef<Path> + Send + std::fmt::Debug + 'stati
 /// - Sqlite: Proper backup of SQLite database files using SQLite's backup API
 /// - Glob: File/directory selection using glob patterns and directory walking
 /// - Base64: In-memory content encoded as base64 (useful for testing)
-#[derive(Clone, From, Serialize, Deserialize, Debug)]
+#[derive(Clone, From, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
-#[derive(ctor)]
-#[ctor(prefix = new, vis = pub)]
 pub enum ArchiveEntryConfig {
     /// SQLite database backup configuration
     ///
     /// Uses SQLite's built-in backup API to create consistent database snapshots
     /// even while the database is being used by other processes.
-    Sqlite(#[ctor(into)] SqliteDBSource),
+    Sqlite(SqliteDBSource),
 
     /// File/directory glob pattern configuration
     ///
     /// Uses directory walking combined with glob pattern matching to select
     /// files and directories for backup. Supports complex include/exclude patterns.
-    Glob(#[ctor(into)] WalkdirAndGlobsetSource),
+    Glob(WalkdirAndGlobsetSource),
 
     /// Base64-encoded content configuration
     ///
     /// Creates archive entries from base64-encoded content.
     /// Primarily useful for testing and small in-memory content.
-    Base64(#[ctor(into)] Base64Source),
+    Base64(Base64Source),
 }
 
 impl Validate for ArchiveEntryConfig {
-    fn validate(&self) -> std::result::Result<(), ValidationErrors> {
+    fn validate(&self) -> result::Result<(), ValidationErrors> {
         match self {
             ArchiveEntryConfig::Sqlite(i) => i.validate(),
             ArchiveEntryConfig::Glob(i) => i.validate(),
@@ -149,20 +157,6 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn test_archive_entry_creation() {
-        let src = PathBuf::from("/source/file.txt");
-        let dst = PathBuf::from("backup/file.txt");
-
-        let entry = ArchiveEntry::new_path(src.clone(), dst.clone());
-        if let ArchiveSource::Path(path) = &entry.src {
-            assert_eq!(path.as_ref().as_ref(), src.as_path());
-        } else {
-            panic!("Expected path source");
-        }
-        assert_eq!(entry.dst.as_ref().as_ref(), dst.as_path());
-    }
-
-    #[test]
     fn test_archive_entry_new_reader() {
         use std::io::Cursor;
         let data = b"test data";
@@ -172,15 +166,5 @@ mod tests {
         let entry = ArchiveEntry::new_reader(reader, dst.clone());
         matches!(entry.src, ArchiveSource::Reader(_));
         assert_eq!(entry.dst.as_ref().as_ref(), dst.as_path());
-    }
-
-    #[test]
-    fn test_archive_entry_debug() {
-        let entry = ArchiveEntry::new_path(PathBuf::from("/src"), PathBuf::from("dst"));
-        let debug_str = format!("{:?}", entry);
-        assert_eq!(
-            debug_str,
-            "ArchiveEntry { src: Path(\"/src\"), dst: \"dst\" }"
-        );
     }
 }

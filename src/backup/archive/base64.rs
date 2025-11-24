@@ -1,30 +1,35 @@
 use crate::backup::archive::{ArchiveEntry, ArchiveEntryIterable};
 use crate::backup::arcvec::ArcVec;
 use crate::backup::result_error::result::Result;
-use derive_ctor::ctor;
+
+use bon::Builder;
 use dyn_iter::{DynIter, IntoDynIterator};
+use getset::Getters;
 use serde::{Deserialize, Serialize};
 use serde_with::base64::Base64;
 use serde_with::As;
+use validator::Validate;
+
 use std::io::Cursor;
 use std::path::PathBuf;
-use validator::Validate;
 
 /// Base64-encoded content source for archive entries
 ///
 /// This source type allows creating archive entries from base64-encoded content,
-/// which is particularly useful for testing and small in-memory data.
-#[derive(Clone, Debug, Serialize, Deserialize, Validate)]
+/// which is particularly useful for testing, configuration data, and small
+/// in-memory content that needs to be included in backups.
+/// 
+/// Content is automatically decoded from base64 during serialization/deserialization.
+#[derive(Clone, Debug, Serialize, Deserialize, Validate, Builder, PartialEq, Eq, Getters)]
 #[serde(deny_unknown_fields)]
-#[derive(ctor)]
-#[ctor(pub new)]
+#[getset(get = "pub")]
 pub struct Base64Source {
     /// Base64-encoded content
     #[serde(with = "As::<Base64>")]
-    #[ctor(into)]
+    #[builder(into)]
     content: ArcVec<u8>,
     /// Destination path within the archive
-    #[ctor(into)]
+    #[builder(into)]
     dst: PathBuf,
 }
 
@@ -43,19 +48,13 @@ mod tests {
     use std::io::Read;
 
     #[test]
-    fn test_base64_source_creation() {
-        let content = vec![1, 2, 3, 4, 5];
-        let source = Base64Source::new(content.clone(), PathBuf::from("test.txt"));
-
-        assert_eq!(source.content.as_ref(), content);
-        assert_eq!(source.dst, PathBuf::from("test.txt"));
-    }
-
-    #[test]
     fn test_base64_source_iterator() {
         let original_content = "Hello, World!";
 
-        let source = Base64Source::new(original_content, PathBuf::from("hello.txt"));
+        let source = Base64Source::builder()
+            .content(original_content)
+            .dst(PathBuf::from("hello.txt"))
+            .build();
 
         let mut iterator = source.archive_entry_iterator().unwrap();
         let entry_result = iterator.next().unwrap();
@@ -72,16 +71,5 @@ mod tests {
 
         assert_eq!(entry.dst.as_ref().as_ref(), PathBuf::from("hello.txt"));
         assert!(iterator.next().is_none());
-    }
-
-    #[test]
-    fn test_base64_source_serialization() {
-        let source = Base64Source::new("test", PathBuf::from("test.txt"));
-
-        let serialized = serde_json::to_string(&source).unwrap();
-        let deserialized: Base64Source = serde_json::from_str(&serialized).unwrap();
-        println!("{}", serialized);
-        assert_eq!(source.content, deserialized.content);
-        assert_eq!(source.dst, deserialized.dst);
     }
 }

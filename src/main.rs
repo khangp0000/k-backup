@@ -1,13 +1,15 @@
-use clap::Parser;
 use k_backup::backup::backup_config::BackupConfig;
 use k_backup::backup::result_error::error::Error;
 use k_backup::backup::result_error::AddMsg;
+
+use clap::Parser;
 use rayon::ThreadPoolBuilder;
+use tracing::error;
+use validator::Validate;
+
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::exit;
-use tracing::error;
-use validator::Validate;
 
 /// k-backup: Automated backup tool with encryption, compression, and retention
 ///

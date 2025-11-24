@@ -1,8 +1,15 @@
+//! Validation functions for configuration values.
+//!
+//! Provides custom validation functions for file paths, directories,
+//! cron expressions, and other configuration parameters.
+
 use chrono::Utc;
 use rusqlite::{Connection, OpenFlags};
 use sanitize_filename::{is_sanitized, sanitize};
-use std::path::Path;
 use validator::ValidationError;
+
+use std::path::Path;
+use std::result;
 
 pub fn validate_valid_archive_base_name<S: AsRef<str>>(name: S) -> Result<(), ValidationError> {
     if !is_sanitized(name.as_ref()) {
@@ -76,7 +83,7 @@ pub fn validate_cron_str<S: AsRef<str>>(cron: S) -> Result<(), ValidationError> 
     Ok(())
 }
 
-pub fn validate_sql_file<P: AsRef<Path>>(path: P) -> std::result::Result<(), ValidationError> {
+pub fn validate_sql_file<P: AsRef<Path>>(path: P) -> result::Result<(), ValidationError> {
     let path = path.as_ref();
     Connection::open_with_flags(
         path,

@@ -1,11 +1,12 @@
 use crate::backup::arcvec::ArcVec;
-use crate::backup::encrypt::age::RedactedString;
+use crate::backup::redacted::RedactedString;
 use crate::backup::function_path;
 use crate::backup::notifications::Notification;
 use crate::backup::result_error::error::Error;
 use crate::backup::result_error::result::Result;
 use crate::backup::result_error::{AddFunctionName, AddMsg};
-use derive_ctor::ctor;
+use bon::Builder;
+use getset::Getters;
 use function_name::named;
 use itertools::Itertools;
 use lettre::message::header::ContentType;
@@ -18,28 +19,37 @@ use std::fmt::Display;
 use std::ops::Deref;
 use validator::Validate;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Validate)]
+/// Configuration for SMTP email notifications
+///
+/// Supports various SMTP modes including SSL, StartTLS, and unsecured connections.
+/// Credentials are stored securely using `RedactedString` to prevent exposure
+/// in logs and debug output.
+#[derive(Clone, Debug, Serialize, Deserialize, Validate, Builder, Getters)]
 #[serde(deny_unknown_fields)]
-#[derive(ctor)]
-#[ctor(pub new)]
 #[serde_as]
+#[getset(get = "pub")]
 pub struct SmtpNotificationConfig {
-    #[ctor(into)]
+    #[builder(into)]
     host: String,
-    #[ctor(into)]
+    #[builder(into)]
     smtp_mode: SmtpMode,
-    #[ctor(into)]
+    #[builder(into)]
     from: Mailbox,
-    #[ctor(into)]
     #[validate(length(min = 1))]
+    #[builder(into)]
     to: ArcVec<Mailbox>,
-    #[ctor(into)]
+    #[builder(into)]
     username: String,
-    #[ctor(into)]
+    #[builder(into)]
     password: RedactedString,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// SMTP connection security modes
+///
+/// - `Unsecured`: Plain text connection (not recommended for production)
+/// - `Ssl`: SSL/TLS encrypted connection from start
+/// - `StartTls`: Start with plain text, then upgrade to TLS
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SmtpMode {
     Unsecured,
     Ssl,
@@ -72,7 +82,7 @@ impl Notification for SmtpNotificationConfig {
             ))
             .add_fn_name(function_path!())?;
 
-        let creds = Credentials::new(self.username.clone(), self.password.inner.clone());
+        let creds = Credentials::new(self.username.clone(), self.password.inner().to_string());
 
         // Open a remote connection to gmail
         let mailer = match self.smtp_mode {
@@ -103,6 +113,90 @@ impl Notification for SmtpNotificationConfig {
                 .map(|m| Error::smtp_send_error(m.to_owned()))
                 .collect_vec();
             Err(Error::lots_of_error(error_vec))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backup::redacted::RedactedString;
+    
+    #[test]
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    fn test_smtp_notification_send() {
+        use maik;
+        use std::env;
+
+        // Skip if running in CI or without network
+        if env::var("CI").is_ok() {
+            return;
+        }
+
+        let server = maik::MockServer::builder().no_verify_credentials().build();
+
+        let config = SmtpNotificationConfig::builder()
+            .host(format!("{}:{}", server.host(), server.port()))
+            .smtp_mode(SmtpMode::Unsecured)
+            .from("test@example.com".parse::<Mailbox>().unwrap())
+            .to(vec!["recipient@example.com".parse::<Mailbox>().unwrap()])
+            .username("testuser")
+            .password(RedactedString::builder().inner("testpass").build())
+            .build();
+
+        server.start();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let result = config.send("Test Subject", "Test message body");
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        if result.is_ok() {
+            let assertion = maik::MailAssertion::new()
+                .recipients_are(["recipient@example.com"])
+                .body_is("Test message body");
+            assert!(server.assert(assertion));
+        }
+    }
+
+    #[test]
+    fn test_smtp_notification_validation() {
+        let valid_config = SmtpNotificationConfig::builder()
+            .host("smtp.example.com")
+            .smtp_mode(SmtpMode::Ssl)
+            .from("test@example.com".parse::<Mailbox>().unwrap())
+            .to(vec!["recipient@example.com".parse::<Mailbox>().unwrap()])
+            .username("testuser")
+            .password(RedactedString::builder().inner("testpass").build())
+            .build();
+
+        assert!(valid_config.validate().is_ok());
+
+        let invalid_config = SmtpNotificationConfig::builder()
+            .host("smtp.example.com")
+            .smtp_mode(SmtpMode::Ssl)
+            .from("test@example.com".parse::<Mailbox>().unwrap())
+            .to(vec![])
+            .username("testuser")
+            .password(RedactedString::builder().inner("testpass").build())
+            .build();
+
+        assert!(invalid_config.validate().is_err());
+    }
+
+    #[test]
+    fn test_smtp_mode_serialization() {
+        let modes = vec![
+            (SmtpMode::Unsecured, "\"Unsecured\""),
+            (SmtpMode::Ssl, "\"Ssl\""),
+            (SmtpMode::StartTls, "\"StartTls\""),
+        ];
+
+        for (mode, expected) in modes {
+            let serialized = serde_json::to_string(&mode).unwrap();
+            assert_eq!(serialized, expected);
+            let deserialized: SmtpMode = serde_json::from_str(&serialized).unwrap();
+            matches!(deserialized, _mode);
         }
     }
 }

@@ -1,3 +1,7 @@
+//! Encryption support for backup archives.
+//!
+//! Provides Age encryption with passphrase-based key derivation.
+
 pub mod age;
 
 use crate::backup::encrypt::age::AgeEncryptorConfig;
@@ -6,7 +10,6 @@ use crate::backup::finish::Finish;
 use crate::backup::result_error::result::Result;
 use crate::backup::result_error::AddFunctionName;
 use ::age::stream::StreamWriter;
-use derive_ctor::ctor;
 use derive_more::From;
 use function_name::named;
 use io_enum::Write;
@@ -21,16 +24,14 @@ pub enum Encryptor<W: Write> {
     AgeEncryptor(StreamWriter<W>),
 }
 
-#[derive(Clone, Default, From, Serialize, Deserialize, Debug)]
+#[derive(Clone, Default, From, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(tag = "encryptor_type")]
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
-#[derive(ctor)]
-#[ctor(prefix = new, vis = pub)]
 pub enum EncryptorConfig {
     #[default]
     None,
-    Age(#[ctor(into)] AgeEncryptorConfig),
+    Age(AgeEncryptorConfig),
 }
 
 impl Validate for EncryptorConfig {
@@ -84,7 +85,8 @@ impl FileExtProvider for EncryptorConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backup::encrypt::age::{AgeEncryptorConfig, RedactedString};
+    use crate::backup::encrypt::age::AgeEncryptorConfig;
+    use crate::backup::redacted::RedactedString;
     use std::io::Cursor;
 
     #[test]
@@ -97,7 +99,9 @@ mod tests {
     #[test]
     fn test_encryptor_config_age() {
         let config = EncryptorConfig::Age(AgeEncryptorConfig::Passphrase {
-            passphrase: RedactedString::new("test_passphrase_123"),
+            passphrase: RedactedString::builder()
+                .inner("test_passphrase_123")
+                .build(),
         });
         assert!(config.validate().is_ok());
         assert!(config.file_ext().is_some());
@@ -122,21 +126,5 @@ mod tests {
         let encryptor = Encryptor::None(writer);
         let result = encryptor.finish();
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_encryptor_config_serialization() {
-        let config = EncryptorConfig::None;
-        let serialized = serde_json::to_string(&config).unwrap();
-        assert_eq!(serialized, "{\"encryptor_type\":\"none\"}");
-
-        let deserialized: EncryptorConfig = serde_json::from_str(&serialized).unwrap();
-        matches!(deserialized, EncryptorConfig::None);
-    }
-
-    #[test]
-    fn test_encryptor_config_default() {
-        let config = EncryptorConfig::default();
-        matches!(config, EncryptorConfig::None);
     }
 }

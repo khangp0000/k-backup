@@ -1,12 +1,21 @@
+//! Core backup functionality and configuration.
+//!
+//! This module contains all the components needed for creating automated backups:
+//! - Archive sources (SQLite, files, base64 content)
+//! - Compression and encryption pipelines
+//! - Retention policies and cleanup
+//! - Configuration management
+//! - Error handling utilities
+
 pub mod archive;
-mod arcvec;
+pub mod arcvec;
 pub mod backup_config;
 pub mod compress;
 pub mod encrypt;
 pub mod file_ext;
 pub mod finish;
-mod notifications;
-mod redacted;
+pub mod notifications;
+pub mod redacted;
 pub mod result_error;
 pub mod retention;
 pub mod tar;
