@@ -67,7 +67,7 @@ pub fn validate_writable_dir<P: AsRef<Path>>(dir: P) -> Result<(), ValidationErr
     })?;
     if md.permissions().readonly() {
         Err(ValidationError::new("InvalidDirectory")
-            .with_message(format!("cannot write ti dir {:?}", dir).into()))
+            .with_message(format!("cannot write to dir {:?}", dir).into()))
     } else {
         Ok(())
     }
