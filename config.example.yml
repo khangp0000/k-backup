@@ -17,7 +17,7 @@ files:
     dst: test.iluvu.txt
 notifications:
   - type: "smtp"
-    host: "smtp.gmail.com"
+    host: "smtp.example.com"
     smtp_mode: "Ssl"
     from: "admin@example.com"
     to: [ "you@example.com", "me@example.com" ]
