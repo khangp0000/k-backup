@@ -10,7 +10,6 @@ use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Debug, Formatter};
 use std::result;
-use validator::Validate;
 use zeroize::Zeroize;
 
 /// Placeholder text shown instead of actual passphrase in logs/debug output
@@ -23,11 +22,9 @@ pub static REDACTED_PASSPHRASE: &str = "###REDACTED_PASSPHRASE###";
 /// 
 /// Provides secure access through getter methods and automatically
 /// zeros memory on drop for additional security.
-#[derive(Validate, Clone, Zeroize, From, Builder, PartialEq, Eq, Getters)]
+#[derive(Clone, Zeroize, From, Builder, PartialEq, Eq, Getters)]
 #[getset(get = "pub")]
 pub struct RedactedString {
-    /// Minimum 8 characters for basic security
-    #[validate(length(min = 8))]
     #[builder(into)]
     inner: String,
 }
@@ -83,16 +80,7 @@ impl Visitor<'_> for RedactedStringVisitor {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_redacted_string_validation() {
-        // Valid passphrase (8+ characters)
-        let valid = RedactedString::builder().inner("valid_password").build();
-        assert!(valid.validate().is_ok());
 
-        // Invalid passphrase (too short)
-        let invalid = RedactedString::builder().inner("short").build();
-        assert!(invalid.validate().is_err());
-    }
 
     #[test]
     fn test_redacted_string_zeroize() {

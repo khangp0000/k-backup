@@ -56,10 +56,27 @@ impl<W: Write> EncryptorBuilder<W> for AgeEncryptorConfig {
 impl Validate for AgeEncryptorConfig {
     /// Validates the encryption configuration
     ///
-    /// Currently only validates that passphrases meet minimum length requirements.
+    /// Validates that Age encryption passphrases meet minimum length requirements
+    /// for basic security (8 characters minimum).
     fn validate(&self) -> result::Result<(), ValidationErrors> {
+        use validator::{ValidateLength, ValidationError};
+        
         match self {
-            AgeEncryptorConfig::Passphrase { passphrase } => passphrase.validate(),
+            AgeEncryptorConfig::Passphrase { passphrase } => {
+                let mut errors = ValidationErrors::new();
+                
+                if !passphrase.inner().validate_length(Some(8), None, None) {
+                    let mut error = ValidationError::new("length");
+                    error.message = Some("Age encryption passphrase must be at least 8 characters long for security".into());
+                    errors.add("passphrase", error);
+                }
+                
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errors)
+                }
+            }
         }
     }
 }
@@ -81,9 +98,9 @@ mod tests {
         };
         assert!(valid_config.validate().is_ok());
 
-        // Invalid configuration (short passphrase)
+        // Invalid configuration (short passphrase - less than 8 characters)
         let invalid_config = AgeEncryptorConfig::Passphrase {
-            passphrase: RedactedString::builder().inner("short").build(),
+            passphrase: RedactedString::builder().inner("1234567").build(),
         };
         assert!(invalid_config.validate().is_err());
     }
