@@ -1,17 +1,14 @@
 use crate::backup::encrypt::{Encryptor, EncryptorBuilder};
+use crate::backup::redacted::{RedactedStringVisitor, REDACTED_PASSPHRASE};
 use crate::backup::result_error::result::Result;
 use derive_ctor::ctor;
 use derive_more::From;
-use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::io::Write;
 use std::result;
 use validator::{Validate, ValidationErrors};
 use zeroize::Zeroize;
-
-/// Placeholder text shown instead of actual passphrase in logs/debug output
-static REDACTED_PASSPHRASE: &str = "###REDACTED_PASSPHRASE###";
 
 /// Configuration for Age encryption
 ///
@@ -47,38 +44,13 @@ pub struct RedactedString {
     /// Minimum 8 characters for basic security
     #[validate(length(min = 8))]
     #[ctor(into)]
-    inner: String,
-}
-
-impl Debug for RedactedString {
-    /// Always shows redacted placeholder instead of actual value
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", REDACTED_PASSPHRASE)
-    }
+    pub inner: String,
 }
 
 impl Serialize for RedactedString {
     /// Always serializes as redacted placeholder for security
     fn serialize<S: Serializer>(&self, serializer: S) -> result::Result<S::Ok, S::Error> {
         serializer.serialize_str(REDACTED_PASSPHRASE)
-    }
-}
-
-struct RedactedStringVisitor;
-
-impl Visitor<'_> for RedactedStringVisitor {
-    type Value = RedactedString;
-
-    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-        formatter.write_str("a string")
-    }
-
-    /// Deserializes the actual passphrase from config file
-    fn visit_str<E>(self, v: &str) -> result::Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(RedactedString { inner: v.into() })
     }
 }
 

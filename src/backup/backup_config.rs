@@ -9,12 +9,12 @@ use crate::backup::result_error::result::convert_error_vec;
 use crate::backup::result_error::result::Result;
 use crate::backup::result_error::{AddFunctionName, AddMsg};
 use crate::backup::retention::{ItemWithDateTime, RetentionConfig};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Local, TimeZone, Utc};
 use itertools::Itertools;
 use rayon::prelude::*;
 use rayon::ThreadPool;
 use serde::{Deserialize, Serialize};
-use serde_with::skip_serializing_none;
+use serde_with::{serde_as, skip_serializing_none};
 use std::collections::HashSet;
 use std::fmt::{Debug, Display};
 use std::fs::read_dir;
@@ -24,17 +24,19 @@ use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use tempfile::NamedTempFile;
+use validator::Validate;
 
-use crate::backup::archive::base64::ArcVec;
+use crate::backup::arcvec::ArcVec;
+use crate::backup::notifications::{Notification, NotificationConfig};
 use crate::backup::validate::validate_cron_str;
 use crate::backup::validate::validate_valid_archive_base_name;
 use crate::backup::validate::validate_writable_dir;
-use validator::Validate;
 
 /// Main configuration structure for the backup system
 #[skip_serializing_none]
 #[derive(Clone, Serialize, Deserialize, Debug, Validate)]
 #[serde(deny_unknown_fields)]
+#[serde_as]
 pub struct BackupConfig {
     /// Cron expression defining backup schedule (UTC timezone)
     #[validate(custom(function = validate_cron_str))]
@@ -51,6 +53,11 @@ pub struct BackupConfig {
     /// List of files and directories to include in backups
     #[validate(length(min = 1), nested)]
     pub files: ArcVec<ArchiveEntryConfig>,
+
+    /// List of notifications configuration
+    #[validate(nested)]
+    #[serde(default)]
+    pub notifications: ArcVec<NotificationConfig>,
 
     /// Compression configuration
     #[validate(nested)]
@@ -263,10 +270,27 @@ impl BackupConfig {
         );
 
         if let Some(non_fatal_error) = non_fatal_error {
-            tracing::warn!(
-                "{}",
-                non_fatal_error.add_msg("Non-fatal error during backup")
+            let non_fatal_error =
+                non_fatal_error.add_msg(format!("Non-fatal while creating backup {:?}", file_path));
+            tracing::warn!("{}", non_fatal_error);
+            tracing::info!("Start sending notifications...");
+            let topic = format!(
+                "[{}] Error while making backup",
+                now.with_timezone(&Local).format(TIME_FORMAT)
             );
+            let notification_errors = self
+                .notifications
+                .iter()
+                .map(|notification| notification.send(&topic, &non_fatal_error))
+                .filter_map(|res| res.err())
+                .collect_vec();
+            if !notification_errors.is_empty() {
+                tracing::error!(
+                    "{}",
+                    Error::lots_of_error(notification_errors)
+                        .add_msg("Error while sending notifications:")
+                );
+            }
         }
 
         backup_set.insert(Rc::new(ItemWithDateTime::from((file_path, now))));
@@ -329,11 +353,13 @@ mod tests {
 
     fn create_test_config() -> BackupConfig {
         let temp_dir = TempDir::new().unwrap();
+
         BackupConfig {
             cron: "0 1 * * *".to_string(),
             archive_base_name: "test_backup".to_string(),
             out_dir: temp_dir.path().to_path_buf(),
             files: vec![].into(),
+            notifications: vec![].into(),
             compressor: CompressorConfig::None,
             encryptor: EncryptorConfig::None,
             retention: None,
@@ -431,6 +457,7 @@ mod tests {
             archive_base_name: "test".to_string(),
             out_dir: temp_dir.path().to_path_buf(),
             files: vec![].into(),
+            notifications: vec![].into(),
             compressor: CompressorConfig::None,
             encryptor: EncryptorConfig::None,
             retention: None,
@@ -460,6 +487,7 @@ mod tests {
                 PathBuf::from("test.txt"),
             ))]
             .into(),
+            notifications: vec![].into(),
             compressor: CompressorConfig::None,
             encryptor: EncryptorConfig::None,
             retention: Some(RetentionConfig {
@@ -544,6 +572,7 @@ mod tests {
                 PathBuf::from("test.txt"),
             ))]
             .into(),
+            notifications: vec![].into(),
             compressor: CompressorConfig::None,
             encryptor: EncryptorConfig::None,
             retention: Some(RetentionConfig {
@@ -648,6 +677,7 @@ mod tests {
                 PathBuf::from("test.txt"),
             ))]
             .into(),
+            notifications: vec![].into(),
             compressor: CompressorConfig::None,
             encryptor: EncryptorConfig::None,
             retention: Some(RetentionConfig {
@@ -760,6 +790,7 @@ mod tests {
                 )),
             ]
             .into(),
+            notifications: vec![].into(),
             compressor: CompressorConfig::Xz(XzConfig::new(6, 2)),
             encryptor: EncryptorConfig::Age(AgeEncryptorConfig::Passphrase {
                 passphrase: RedactedString::new(passphrase),

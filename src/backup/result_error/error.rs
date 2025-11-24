@@ -13,6 +13,10 @@ pub enum ErrorInternal {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
+    Smtp(#[from] lettre::transport::smtp::Error),
+    #[error(transparent)]
+    Lettre(#[from] lettre::error::Error),
+    #[error(transparent)]
     StripPrefixError(#[from] std::path::StripPrefixError),
     #[error(transparent)]
     Rusqlite(#[from] rusqlite::Error),
@@ -33,13 +37,15 @@ pub enum ErrorInternal {
         msg: Cow<'static, str>,
         error: Error,
     },
-    #[error("{}() failed:\n{}", fn_name, indent::indent_all_with("  ", error.to_string()))]
+    #[error("{} failed:\n{}", fn_name, indent::indent_all_with("  ", error.to_string()))]
     WithFnName {
         fn_name: Cow<'static, str>,
         error: Error,
     },
     #[error("{}", itertools::join(.0, "\n\n"))]
     LotsOfError(Vec<Error>),
+    #[error("{0}")]
+    SmtpSendError(Cow<'static, str>),
 }
 
 impl AddFunctionName for Error {

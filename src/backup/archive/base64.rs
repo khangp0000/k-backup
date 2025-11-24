@@ -1,16 +1,14 @@
 use crate::backup::archive::{ArchiveEntry, ArchiveEntryIterable};
+use crate::backup::arcvec::ArcVec;
 use crate::backup::result_error::result::Result;
 use derive_ctor::ctor;
-use derive_more::{Deref, DerefMut, From};
 use dyn_iter::{DynIter, IntoDynIterator};
 use serde::{Deserialize, Serialize};
 use serde_with::base64::Base64;
 use serde_with::As;
 use std::io::Cursor;
-use std::ops::Deref;
 use std::path::PathBuf;
-use std::sync::Arc;
-use validator::{Validate, ValidateLength};
+use validator::Validate;
 
 /// Base64-encoded content source for archive entries
 ///
@@ -28,76 +26,6 @@ pub struct Base64Source {
     /// Destination path within the archive
     #[ctor(into)]
     dst: PathBuf,
-}
-
-#[derive(
-    From,
-    Clone,
-    Debug,
-    Serialize,
-    Deserialize,
-    Ord,
-    PartialOrd,
-    Eq,
-    PartialEq,
-    ctor,
-    Validate,
-    Deref,
-    DerefMut,
-)]
-#[ctor(pub new)]
-#[serde(transparent)]
-pub struct ArcVec<T> {
-    #[ctor(into)]
-    inner: Arc<Vec<T>>,
-}
-
-impl<T> ValidateLength<usize> for ArcVec<T> {
-    fn length(&self) -> Option<usize> {
-        Some(self.inner.len())
-    }
-}
-
-impl<T> AsRef<[T]> for ArcVec<T> {
-    fn as_ref(&self) -> &[T] {
-        self.inner.deref().as_ref()
-    }
-}
-
-macro_rules! impl_into_arcvec {
-    ($ty:ty) => {
-        impl<T> From<$ty> for ArcVec<T>
-        where
-            $ty: Into<Vec<T>>,
-        {
-            fn from(val: $ty) -> ArcVec<T> {
-                ArcVec::from(val.into())
-            }
-        }
-    };
-    (a $ty:ty) => {
-        impl<'a, T> From<$ty> for ArcVec<T>
-        where
-            $ty: Into<Vec<T>>,
-        {
-            fn from(val: $ty) -> ArcVec<T> {
-                ArcVec::from(val.into())
-            }
-        }
-    };
-}
-
-impl_into_arcvec!(String);
-impl_into_arcvec!(Box<str>);
-impl_into_arcvec!(Box<[T]>);
-impl_into_arcvec!(a &'a str);
-impl_into_arcvec!(a &'a String);
-impl_into_arcvec!(a &'a [T]);
-
-impl<T> From<Vec<T>> for ArcVec<T> {
-    fn from(value: Vec<T>) -> Self {
-        Self::new(value)
-    }
 }
 
 impl ArchiveEntryIterable for Base64Source {
