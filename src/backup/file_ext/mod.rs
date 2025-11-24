@@ -1,3 +1,8 @@
+//! File extension provider trait for backup components.
+//!
+//! Allows compression and encryption components to specify their file extensions
+//! for building complete backup file names.
+
 pub trait FileExtProvider {
     fn file_ext(&self) -> Option<impl AsRef<str>>;
 }

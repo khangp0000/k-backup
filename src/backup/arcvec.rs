@@ -1,9 +1,14 @@
-use derive_ctor::ctor;
+//! Thread-safe reference-counted vector wrapper.
+//!
+//! Provides `ArcVec<T>` for sharing vector data across threads with validation support.
+
+use bon::Builder;
 use derive_more::{Deref, DerefMut, From};
 use serde::{Deserialize, Serialize};
+use validator::{Validate, ValidateLength};
+
 use std::ops::Deref;
 use std::sync::Arc;
-use validator::{Validate, ValidateLength};
 
 #[derive(
     From,
@@ -15,17 +20,17 @@ use validator::{Validate, ValidateLength};
     PartialOrd,
     Eq,
     PartialEq,
-    ctor,
+    Builder,
     Validate,
     Deref,
     DerefMut,
 )]
-#[ctor(pub new)]
 #[serde(transparent)]
 pub struct ArcVec<T> {
-    #[ctor(into)]
     inner: Arc<Vec<T>>,
 }
+
+impl<T> ArcVec<T> {}
 
 impl<T> Default for ArcVec<T> {
     fn default() -> Self {
@@ -41,7 +46,7 @@ impl<T> ValidateLength<usize> for ArcVec<T> {
 
 impl<T> From<Vec<T>> for ArcVec<T> {
     fn from(value: Vec<T>) -> Self {
-        Self::new(value)
+        Self::builder().inner(Arc::new(value)).build()
     }
 }
 

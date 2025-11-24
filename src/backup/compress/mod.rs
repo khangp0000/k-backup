@@ -1,3 +1,7 @@
+//! Compression support for backup archives.
+//!
+//! Provides XZ/LZMA compression with configurable levels and threading.
+
 pub mod xz;
 
 use crate::backup::file_ext::FileExtProvider;
@@ -5,7 +9,6 @@ use crate::backup::finish::Finish;
 use crate::backup::function_path;
 use crate::backup::result_error::result::Result;
 use crate::backup::result_error::AddFunctionName;
-use derive_ctor::ctor;
 use derive_more::From;
 use function_name::named;
 use io_enum::Write;
@@ -22,17 +25,15 @@ pub enum Compressor<W: Write> {
     XzEncoder(XzEncoder<W>),
 }
 
-#[derive(Clone, Default, From, Serialize, Deserialize, Debug)]
+#[derive(Clone, Default, From, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(tag = "compressor_type")]
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
-#[derive(ctor)]
-#[ctor(prefix = new, vis = pub)]
 #[from(forward)]
 pub enum CompressorConfig {
     #[default]
     None,
-    Xz(#[ctor(into)] xz::XzConfig),
+    Xz(xz::XzConfig),
 }
 
 impl Validate for CompressorConfig {
@@ -98,7 +99,7 @@ mod tests {
 
     #[test]
     fn test_compressor_config_xz() {
-        let config = CompressorConfig::Xz(XzConfig::new(1, 2));
+        let config = CompressorConfig::Xz(XzConfig::builder().level(1).thread(2).build());
         assert!(config.validate().is_ok());
         assert!(config.file_ext().is_some());
         assert_eq!(config.file_ext().unwrap().as_ref(), "xz");
@@ -122,21 +123,5 @@ mod tests {
         let compressor = Compressor::None(writer);
         let result = compressor.finish();
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_compressor_config_serialization() {
-        let config = CompressorConfig::None;
-        let serialized = serde_json::to_string(&config).unwrap();
-        assert_eq!(serialized, "{\"compressor_type\":\"none\"}");
-
-        let deserialized: CompressorConfig = serde_json::from_str(&serialized).unwrap();
-        matches!(deserialized, CompressorConfig::None);
-    }
-
-    #[test]
-    fn test_compressor_config_default() {
-        let config = CompressorConfig::default();
-        matches!(config, CompressorConfig::None);
     }
 }

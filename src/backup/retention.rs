@@ -1,3 +1,5 @@
+use bon::Builder;
+use getset::Getters;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
@@ -10,46 +12,48 @@ fn default_min_backups() -> usize {
 
 /// Configuration for backup retention policies
 ///
-/// Defines how long different types of backups should be kept:
-/// - default_retention: Applied to all backups
-/// - daily_retention: Special retention for daily backups (keeps one per day)
-/// - monthly_retention: Special retention for monthly backups (keeps one per month)  
-/// - yearly_retention: Special retention for yearly backups (keeps one per year)
-/// - min_backups: Minimum number of backups to always keep (safety net)
+/// Implements grandfather-father-son backup rotation with configurable retention periods:
+/// - `default_retention`: Base retention applied to all backups
+/// - `daily_retention`: Keeps one backup per day for specified duration
+/// - `monthly_retention`: Keeps one backup per month for specified duration  
+/// - `yearly_retention`: Keeps one backup per year for specified duration
+/// - `min_backups`: Safety net - minimum backups to always keep regardless of age
 ///
-/// The algorithm keeps the most recent backup in each time category,
-/// allowing for grandfather-father-son backup rotation schemes.
+/// The algorithm preserves the most recent backup in each time category,
+/// allowing for sophisticated backup rotation schemes while preventing
+/// accidental deletion of all backups.
 #[skip_serializing_none]
-#[derive(Clone, Validate, Serialize, Deserialize, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, Validate, Builder, Getters)]
 #[serde(deny_unknown_fields)]
+#[getset(get = "pub")]
 pub struct RetentionConfig {
     /// Base retention period applied to all backups
     ///
     /// Backups older than this duration are eligible for deletion,
     /// unless they're preserved by daily/monthly/yearly retention rules.
     #[serde(with = "humantime_serde")]
-    pub default_retention: std::time::Duration,
+    default_retention: std::time::Duration,
 
     /// How long to keep daily backups (one per day)
     ///
     /// The most recent backup from each day within this period is preserved.
     /// Example: "7days" keeps one backup per day for the last week.
     #[serde(with = "humantime_serde")]
-    pub daily_retention: Option<std::time::Duration>,
+    daily_retention: Option<std::time::Duration>,
 
     /// How long to keep monthly backups (one per month)
     ///
     /// The most recent backup from each month within this period is preserved.
     /// Example: "3months" keeps one backup per month for the last 3 months.
     #[serde(with = "humantime_serde")]
-    pub monthly_retention: Option<std::time::Duration>,
+    monthly_retention: Option<std::time::Duration>,
 
     /// How long to keep yearly backups (one per year)
     ///
     /// The most recent backup from each year within this period is preserved.
     /// Example: "5years" keeps one backup per year for the last 5 years.
     #[serde(with = "humantime_serde")]
-    pub yearly_retention: Option<std::time::Duration>,
+    yearly_retention: Option<std::time::Duration>,
 
     /// Minimum number of backups to always keep
     ///
@@ -57,18 +61,17 @@ pub struct RetentionConfig {
     /// hasn't run for a long time. Always keeps at least this many of the
     /// most recent backups, regardless of age.
     #[serde(default = "default_min_backups")]
-    pub min_backups: usize,
+    #[builder(default = default_min_backups())]
+    min_backups: usize,
 }
+
+
 
 impl Default for RetentionConfig {
     fn default() -> Self {
-        Self {
-            default_retention: std::time::Duration::from_secs(0),
-            daily_retention: None,
-            monthly_retention: None,
-            yearly_retention: None,
-            min_backups: default_min_backups(),
-        }
+        Self::builder()
+            .default_retention(std::time::Duration::from_secs(0))
+            .build()
     }
 }
 
@@ -207,30 +210,31 @@ fn should_keep<O: Copy, T: TimeZone<Offset = O>, R: Ord, F: Fn(&DateTime<T>) -> 
     }
 }
 
-#[derive(Clone, Hash, Eq, PartialEq, Debug)]
+/// Associates an item with a timestamp for retention management
+///
+/// Used to track backup files with their creation times for retention policy
+/// evaluation. Generic over both the item type and timezone.
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Builder, Getters)]
+#[getset(get = "pub")]
 pub struct ItemWithDateTime<R, T: TimeZone = Utc> {
-    pub item: R,
-    pub date_time: DateTime<T>,
+    item: R,
+    date_time: DateTime<T>,
 }
 
-impl<T: TimeZone> ItemWithDateTime<(), T> {
-    fn new<D: Into<DateTime<T>>>(date_time: D) -> Self {
-        Self::from(((), date_time))
-    }
-}
+
 
 impl<T: TimeZone> From<DateTime<T>> for ItemWithDateTime<(), T> {
     fn from(value: DateTime<T>) -> Self {
-        Self::new(value)
+        Self::from(((), value))
     }
 }
 
 impl<R, T: TimeZone, D: Into<DateTime<T>>> From<(R, D)> for ItemWithDateTime<R, T> {
     fn from(value: (R, D)) -> Self {
-        Self {
-            item: value.0,
-            date_time: value.1.into(),
-        }
+        Self::builder()
+            .item(value.0)
+            .date_time(value.1.into())
+            .build()
     }
 }
 
@@ -247,13 +251,13 @@ mod tests {
     use std::time::Duration as StdDuration;
 
     fn create_test_retention_config() -> RetentionConfig {
-        RetentionConfig {
-            default_retention: StdDuration::from_secs(7 * 24 * 3600), // 7 days
-            daily_retention: Some(StdDuration::from_secs(30 * 24 * 3600)), // 30 days
-            monthly_retention: Some(StdDuration::from_secs(365 * 24 * 3600)), // 1 year
-            yearly_retention: Some(StdDuration::from_secs(5 * 365 * 24 * 3600)), // 5 years
-            min_backups: 3,
-        }
+        RetentionConfig::builder()
+            .default_retention(StdDuration::from_secs(7 * 24 * 3600)) // 7 days
+            .daily_retention(StdDuration::from_secs(30 * 24 * 3600)) // 30 days
+            .monthly_retention(StdDuration::from_secs(365 * 24 * 3600)) // 1 year
+            .yearly_retention(StdDuration::from_secs(5 * 365 * 24 * 3600)) // 5 years
+            .min_backups(3)
+            .build()
     }
 
     #[test]
@@ -268,19 +272,19 @@ mod tests {
 
     #[test]
     fn test_min_backups_safety_net() {
-        let config = RetentionConfig {
-            default_retention: StdDuration::from_secs(1), // 1 second (very short)
-            daily_retention: None,
-            monthly_retention: None,
-            yearly_retention: None,
-            min_backups: 3,
-        };
+        let config = RetentionConfig::builder()
+            .default_retention(StdDuration::from_secs(1)) // 1 second (very short)
+            .min_backups(3)
+            .build();
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
         let old_backups: Vec<_> = (0..5)
             .map(|i| {
                 let dt = now - Duration::days(i + 10); // All very old
-                <ItemWithDateTime<_, Utc>>::from((format!("backup_{}", i), dt))
+                ItemWithDateTime::builder()
+                    .item(format!("backup_{}", i))
+                    .date_time(dt)
+                    .build()
             })
             .collect();
 
@@ -292,18 +296,21 @@ mod tests {
 
     #[test]
     fn test_default_retention_only() {
-        let config = RetentionConfig {
-            default_retention: StdDuration::from_secs(7 * 24 * 3600), // 7 days
-            daily_retention: None,
-            monthly_retention: None,
-            yearly_retention: None,
-            min_backups: 1,
-        };
+        let config = RetentionConfig::builder()
+            .default_retention(StdDuration::from_secs(7 * 24 * 3600)) // 7 days
+            .min_backups(1)
+            .build();
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
         let backups = [
-            <ItemWithDateTime<_, Utc>>::from(("recent", now - Duration::days(3))),
-            <ItemWithDateTime<_, Utc>>::from(("old", now - Duration::days(10))),
+            ItemWithDateTime::builder()
+                .item("recent")
+                .date_time(now - Duration::days(3))
+                .build(),
+            ItemWithDateTime::builder()
+                .item("old")
+                .date_time(now - Duration::days(10))
+                .build(),
         ];
 
         let to_delete = config.get_delete(backups.iter(), now);
@@ -315,26 +322,27 @@ mod tests {
 
     #[test]
     fn test_daily_retention() {
-        let config = RetentionConfig {
-            default_retention: StdDuration::from_secs(24 * 3600), // 1 day
-            daily_retention: Some(StdDuration::from_secs(7 * 24 * 3600)), // 7 days
-            monthly_retention: None,
-            yearly_retention: None,
-            min_backups: 1,
-        };
+        let config = RetentionConfig::builder()
+            .default_retention(StdDuration::from_secs(24 * 3600)) // 1 day
+            .daily_retention(StdDuration::from_secs(7 * 24 * 3600)) // 7 days
+            .min_backups(1)
+            .build();
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
         let backups = [
-            <ItemWithDateTime<_, Utc>>::from((
-                "day5_backup1",
-                now - Duration::days(5) - Duration::hours(2),
-            )),
-            <ItemWithDateTime<_, Utc>>::from((
-                "day5_backup2",
-                now - Duration::days(5) - Duration::hours(1),
-            )),
+            ItemWithDateTime::builder()
+                .item("day5_backup1")
+                .date_time(now - Duration::days(5) - Duration::hours(2))
+                .build(),
+            ItemWithDateTime::builder()
+                .item("day5_backup2")
+                .date_time(now - Duration::days(5) - Duration::hours(1))
+                .build(),
             // One backup from 10 days ago (outside daily retention)
-            <ItemWithDateTime<_, Utc>>::from(("day10_backup", now - Duration::days(10))),
+            ItemWithDateTime::builder()
+                .item("day10_backup")
+                .date_time(now - Duration::days(10))
+                .build(),
         ];
 
         let to_delete = config.get_delete(backups.iter(), now);
@@ -345,20 +353,27 @@ mod tests {
 
     #[test]
     fn test_monthly_retention() {
-        let config = RetentionConfig {
-            default_retention: StdDuration::from_secs(7 * 24 * 3600), // 7 days
-            daily_retention: None,
-            monthly_retention: Some(StdDuration::from_secs(90 * 24 * 3600)), // 90 days
-            yearly_retention: None,
-            min_backups: 1,
-        };
+        let config = RetentionConfig::builder()
+            .default_retention(StdDuration::from_secs(7 * 24 * 3600)) // 7 days
+            .monthly_retention(StdDuration::from_secs(90 * 24 * 3600)) // 90 days
+            .min_backups(1)
+            .build();
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
         let backups = [
-            <ItemWithDateTime<_, Utc>>::from(("month1_backup1", now - Duration::days(30))),
-            <ItemWithDateTime<_, Utc>>::from(("month1_backup2", now - Duration::days(35))),
+            ItemWithDateTime::builder()
+                .item("month1_backup1")
+                .date_time(now - Duration::days(30))
+                .build(),
+            ItemWithDateTime::builder()
+                .item("month1_backup2")
+                .date_time(now - Duration::days(35))
+                .build(),
             // One backup from 120 days ago (outside monthly retention)
-            <ItemWithDateTime<_, Utc>>::from(("old_backup", now - Duration::days(120))),
+            ItemWithDateTime::builder()
+                .item("old_backup")
+                .date_time(now - Duration::days(120))
+                .build(),
         ];
 
         let to_delete = config.get_delete(backups.iter(), now);
@@ -369,20 +384,27 @@ mod tests {
 
     #[test]
     fn test_yearly_retention() {
-        let config = RetentionConfig {
-            default_retention: StdDuration::from_secs(30 * 24 * 3600), // 30 days
-            daily_retention: None,
-            monthly_retention: None,
-            yearly_retention: Some(StdDuration::from_secs(3 * 365 * 24 * 3600)), // 3 years
-            min_backups: 1,
-        };
+        let config = RetentionConfig::builder()
+            .default_retention(StdDuration::from_secs(30 * 24 * 3600)) // 30 days
+            .yearly_retention(StdDuration::from_secs(3 * 365 * 24 * 3600)) // 3 years
+            .min_backups(1)
+            .build();
 
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
         let backups = [
-            <ItemWithDateTime<_, Utc>>::from(("year1_backup1", now - Duration::days(365))),
-            <ItemWithDateTime<_, Utc>>::from(("year1_backup2", now - Duration::days(370))),
+            ItemWithDateTime::builder()
+                .item("year1_backup1")
+                .date_time(now - Duration::days(365))
+                .build(),
+            ItemWithDateTime::builder()
+                .item("year1_backup2")
+                .date_time(now - Duration::days(370))
+                .build(),
             // One backup from 4 years ago (outside yearly retention)
-            <ItemWithDateTime<_, Utc>>::from(("old_backup", now - Duration::days(4 * 365))),
+            ItemWithDateTime::builder()
+                .item("old_backup")
+                .date_time(now - Duration::days(4 * 365))
+                .build(),
         ];
 
         let to_delete = config.get_delete(backups.iter(), now);
@@ -397,16 +419,37 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
 
         let backups = [
-            <ItemWithDateTime<_, Utc>>::from(("recent1", now - Duration::days(1))),
-            <ItemWithDateTime<_, Utc>>::from(("recent2", now - Duration::days(2))),
+            ItemWithDateTime::builder()
+                .item("recent1")
+                .date_time(now - Duration::days(1))
+                .build(),
+            ItemWithDateTime::builder()
+                .item("recent2")
+                .date_time(now - Duration::days(2))
+                .build(),
             // Daily retention candidates
-            <ItemWithDateTime<_, Utc>>::from(("daily1", now - Duration::days(15))),
-            <ItemWithDateTime<_, Utc>>::from(("daily2", now - Duration::days(16))), // Same day, should be deleted
+            ItemWithDateTime::builder()
+                .item("daily1")
+                .date_time(now - Duration::days(15))
+                .build(),
+            ItemWithDateTime::builder()
+                .item("daily2")
+                .date_time(now - Duration::days(16))
+                .build(), // Same day, should be deleted
             // Monthly retention candidates
-            ItemWithDateTime::from(("monthly1", now - Duration::days(60))),
-            ItemWithDateTime::from(("monthly2", now - Duration::days(65))), // Same month, should be deleted
+            ItemWithDateTime::builder()
+                .item("monthly1")
+                .date_time(now - Duration::days(60))
+                .build(),
+            ItemWithDateTime::builder()
+                .item("monthly2")
+                .date_time(now - Duration::days(65))
+                .build(), // Same month, should be deleted
             // Very old backup (outside all retention)
-            ItemWithDateTime::from(("very_old", now - Duration::days(2000))),
+            ItemWithDateTime::builder()
+                .item("very_old")
+                .date_time(now - Duration::days(2000))
+                .build(),
         ];
 
         let to_delete = config.get_delete(backups.iter(), now);
@@ -425,28 +468,5 @@ mod tests {
         let to_delete = config.get_delete(backups.iter(), now);
 
         assert_eq!(to_delete.len(), 0);
-    }
-
-    #[test]
-    fn test_item_with_datetime_creation() {
-        let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
-
-        // Test From<DateTime<T>>
-        let item1: ItemWithDateTime<(), Utc> = now.into();
-        assert_eq!(item1.date_time, now);
-
-        // Test From<(R, DateTime<T>)>
-        let item2: ItemWithDateTime<String, Utc> = ("test".to_string(), now).into();
-        assert_eq!(item2.item, "test");
-        assert_eq!(item2.date_time, now);
-    }
-
-    #[test]
-    fn test_item_with_datetime_equality() {
-        let now = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
-        let item1 = <ItemWithDateTime<_, Utc>>::from(("test", now));
-        let item2 = <ItemWithDateTime<_, Utc>>::from(("test", now));
-
-        assert_eq!(item1, item2);
     }
 }

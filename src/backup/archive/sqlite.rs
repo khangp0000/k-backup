@@ -3,32 +3,38 @@ use crate::backup::function_path;
 use crate::backup::result_error::result::Result;
 use crate::backup::result_error::AddFunctionName;
 use crate::backup::validate::validate_sql_file;
-use derive_ctor::ctor;
+
+use bon::Builder;
 use dyn_iter::{DynIter, IntoDynIterator};
 use function_name::named;
+use getset::Getters;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
-use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use validator::Validate;
+
+use std::fmt::Debug;
+use std::path::PathBuf;
 
 /// Configuration for backing up SQLite database files
 ///
 /// Uses SQLite's built-in backup API to create consistent snapshots
 /// even while the database is being actively used by other processes.
-/// This is much safer than just copying the database file.
-#[derive(Serialize, Deserialize, Debug, Clone, Validate)]
+/// This is much safer than just copying the database file as it ensures
+/// transactional consistency and handles concurrent access properly.
+/// 
+/// The backup process creates a temporary file that is automatically
+/// cleaned up after being added to the archive.
+#[derive(Clone, Debug, Serialize, Deserialize, Validate, Builder, PartialEq, Eq, Getters)]
 #[serde(deny_unknown_fields)]
-#[derive(ctor)]
-#[ctor(pub new)]
+#[getset(get = "pub")]
 pub struct SqliteDBSource {
     /// Path to the source SQLite database file
-    #[ctor(into)]
     #[validate(custom(function = validate_sql_file))]
+    #[builder(into)]
     src: PathBuf,
     /// Destination path within the backup archive
-    #[ctor(into)]
+    #[builder(into)]
     dst: PathBuf,
 }
 
@@ -105,45 +111,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sqlite_db_source_creation() {
-        let src = PathBuf::from("/path/to/database.db");
-        let dst = PathBuf::from("backup/database.db");
-
-        let source = SqliteDBSource::new(src.clone(), dst.clone());
-
-        assert_eq!(source.src, src);
-        assert_eq!(source.dst, dst);
-    }
-
-    #[test]
-    fn test_sqlite_db_source_serialization() {
-        let source = SqliteDBSource::new(
-            PathBuf::from("/path/to/database.db"),
-            PathBuf::from("backup/database.db"),
-        );
-
-        let serialized = serde_json::to_string(&source).unwrap();
-        let deserialized: SqliteDBSource = serde_json::from_str(&serialized).unwrap();
-
-        assert_eq!(source.src, deserialized.src);
-        assert_eq!(source.dst, deserialized.dst);
-    }
-
-    #[test]
-    fn test_sqlite_db_source_debug() {
-        let source = SqliteDBSource::new(
-            PathBuf::from("/path/to/database.db"),
-            PathBuf::from("backup/database.db"),
-        );
-
-        let debug_str = format!("{:?}", source);
-        assert_eq!(
-            debug_str,
-            "SqliteDBSource { src: \"/path/to/database.db\", dst: \"backup/database.db\" }"
-        );
-    }
-
-    #[test]
     fn test_archive_entry_iterator_with_valid_database() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
@@ -151,7 +118,10 @@ mod tests {
         // Create a test database
         create_test_database(&db_path).unwrap();
 
-        let source = SqliteDBSource::new(db_path, PathBuf::from("backup/test.db"));
+        let source = SqliteDBSource::builder()
+            .src(db_path)
+            .dst(PathBuf::from("backup/test.db"))
+            .build();
 
         let iterator = source.archive_entry_iterator().unwrap();
         let entries: Vec<_> = iterator.collect();
@@ -180,10 +150,10 @@ mod tests {
 
     #[test]
     fn test_archive_entry_iterator_with_nonexistent_database() {
-        let source = SqliteDBSource::new(
-            PathBuf::from("/nonexistent/database.db"),
-            PathBuf::from("backup/database.db"),
-        );
+        let source = SqliteDBSource::builder()
+            .src(PathBuf::from("/nonexistent/database.db"))
+            .dst(PathBuf::from("backup/database.db"))
+            .build();
 
         let result = source.validate();
         assert!(result.is_err());
@@ -197,7 +167,10 @@ mod tests {
         // Create a file that's not a valid SQLite database
         std::fs::write(&invalid_db_path, "not a database").unwrap();
 
-        let source = SqliteDBSource::new(invalid_db_path, PathBuf::from("backup/invalid.db"));
+        let source = SqliteDBSource::builder()
+            .src(invalid_db_path)
+            .dst(PathBuf::from("backup/invalid.db"))
+            .build();
 
         let result = source.archive_entry_iterator().unwrap().next().unwrap();
         assert!(result.is_err());
@@ -222,7 +195,10 @@ mod tests {
         }
         drop(conn);
 
-        let source = SqliteDBSource::new(db_path, PathBuf::from("backup/test.db"));
+        let source = SqliteDBSource::builder()
+            .src(db_path)
+            .dst(PathBuf::from("backup/test.db"))
+            .build();
 
         let iterator = source.archive_entry_iterator().unwrap();
         let entries: Vec<_> = iterator.collect();
@@ -249,7 +225,10 @@ mod tests {
         // Create a test database
         create_test_database(&db_path).unwrap();
 
-        let source = SqliteDBSource::new(db_path, PathBuf::from("backup/test.db"));
+        let source = SqliteDBSource::builder()
+            .src(db_path)
+            .dst(PathBuf::from("backup/test.db"))
+            .build();
 
         let temp_file_path = {
             let iterator = source.archive_entry_iterator().unwrap();

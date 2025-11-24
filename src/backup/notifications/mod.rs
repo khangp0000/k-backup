@@ -1,6 +1,10 @@
+//! Notification system for backup events.
+//!
+//! Sends notifications about backup failures and other important events.
+//! Currently supports SMTP email notifications.
+
 use crate::backup::notifications::smtp::SmtpNotificationConfig;
 use crate::backup::result_error::result::Result;
-use derive_ctor::ctor;
 use derive_more::From;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -13,10 +17,8 @@ pub mod smtp;
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
-#[derive(ctor)]
-#[ctor(prefix = new, vis = pub)]
 pub enum NotificationConfig {
-    Smtp(#[ctor(into)] SmtpNotificationConfig),
+    Smtp(SmtpNotificationConfig),
 }
 
 impl Validate for NotificationConfig {

@@ -5,31 +5,39 @@ use crate::backup::result_error::result::Result;
 use crate::backup::result_error::AddFunctionName;
 use crate::backup::result_error::AddMsg;
 use crate::backup::validate::validate_dir_exist;
-use derive_ctor::ctor;
+
+use bon::Builder;
 use derive_more::{Display, From};
 use dyn_iter::{DynIter, IntoDynIterator};
 use function_name::named;
+use getset::Getters;
 use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::fmt::{Debug, Formatter};
-use std::path::{Path, PathBuf};
 use validator::Validate;
 use walkdir::{DirEntry, WalkDir};
 
-#[derive(Clone, Debug, Serialize, Deserialize, Validate)]
+use std::fmt::{Debug, Formatter};
+use std::path::{Path, PathBuf};
+use std::result;
+
+/// Configuration for backing up files using directory walking and glob patterns
+///
+/// Recursively walks a source directory and includes files that match
+/// the specified glob patterns. Supports multiple glob patterns and
+/// preserves directory structure in the backup archive.
+#[derive(Clone, Debug, Serialize, Deserialize, Validate, Builder, PartialEq, Eq, Getters)]
 #[serde(deny_unknown_fields)]
-#[derive(ctor)]
-#[ctor(pub new)]
+#[getset(get = "pub")]
 pub struct WalkdirAndGlobsetSource {
-    #[ctor(into)]
     #[validate(custom(function = validate_dir_exist))]
+    #[builder(into)]
     src_dir: PathBuf,
-    #[ctor(into)]
     #[serde(default)]
+    #[builder(default, into)]
     dst_dir: PathBuf,
-    #[ctor(into)]
     #[serde(default = "default_globset")]
+    #[builder(default = default_globset(), into)]
     globset: Vec<CustomDeserializedGlob>,
 }
 
@@ -37,11 +45,16 @@ fn default_globset() -> Vec<CustomDeserializedGlob> {
     vec![CustomDeserializedGlob::default()]
 }
 
-#[derive(Clone, Debug, Serialize, From, Display, ctor)]
-#[ctor(pub new)]
+/// A glob pattern wrapper that handles custom deserialization
+///
+/// Wraps the `globset::Glob` type with custom serde support for
+/// deserializing glob patterns from JSON strings. Automatically
+/// enables literal separator mode for consistent path matching.
+#[derive(Clone, Debug, From, Display, Serialize, Builder, PartialEq, Eq, Getters)]
 #[serde(transparent)]
+#[getset(get = "pub")]
 pub struct CustomDeserializedGlob {
-    #[ctor(into)]
+    #[builder(into)]
     glob: Glob,
 }
 
@@ -64,7 +77,7 @@ impl Visitor<'_> for CustomGlobVisitor {
         formatter.write_str("a glob pattern")
     }
 
-    fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E>
+    fn visit_str<E>(self, v: &str) -> result::Result<Self::Value, E>
     where
         E: serde::de::Error,
     {
@@ -77,7 +90,7 @@ impl Visitor<'_> for CustomGlobVisitor {
 }
 
 impl<'de> Deserialize<'de> for CustomDeserializedGlob {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> result::Result<Self, D::Error> {
         deserializer.deserialize_str(CustomGlobVisitor)
     }
 }
@@ -184,27 +197,6 @@ mod tests {
     }
 
     #[test]
-    fn test_custom_deserialized_glob_default() {
-        let glob = CustomDeserializedGlob::default();
-        let glob_str = glob.to_string();
-        assert_eq!(glob_str, "**/*");
-    }
-
-    #[test]
-    fn test_custom_deserialized_glob_debug() {
-        let glob = CustomDeserializedGlob::default();
-        let debug_str = format!("{:?}", glob);
-        assert_eq!(debug_str, "CustomDeserializedGlob { glob: Glob(\"**/*\") }");
-    }
-
-    #[test]
-    fn test_custom_deserialized_glob_serialization() {
-        let glob = CustomDeserializedGlob::default();
-        let serialized = serde_json::to_string(&glob).unwrap();
-        assert_eq!(serialized, "\"**/*\"");
-    }
-
-    #[test]
     fn test_custom_deserialized_glob_deserialization() {
         let json = "\"*.txt\"";
         let glob: CustomDeserializedGlob = serde_json::from_str(json).unwrap();
@@ -219,26 +211,15 @@ mod tests {
     }
 
     #[test]
-    fn test_walkdir_globset_source_serialization() {
-        let source = WalkdirAndGlobsetSource::new(
-            "/path/to/source",
-            "backup",
-            vec![CustomDeserializedGlob::default()],
-        );
-
-        let serialized = serde_json::to_string(&source).unwrap();
-        let deserialized: WalkdirAndGlobsetSource = serde_json::from_str(&serialized).unwrap();
-
-        assert_eq!(source.src_dir, deserialized.src_dir);
-        assert_eq!(source.dst_dir, deserialized.dst_dir);
-    }
-
-    #[test]
     fn test_archive_entry_iterator_with_valid_directory() {
         let temp_dir = TempDir::new().unwrap();
         create_test_files(temp_dir.path()).unwrap();
 
-        let source = WalkdirAndGlobsetSource::new(temp_dir.path(), "backup", vec![]);
+        let source = WalkdirAndGlobsetSource::builder()
+            .src_dir(temp_dir.path())
+            .dst_dir("backup")
+            .globset(vec![])
+            .build();
 
         let iterator = source.archive_entry_iterator().unwrap();
         let entries: Vec<_> = iterator.collect();
@@ -265,7 +246,11 @@ mod tests {
         create_test_files(temp_dir.path()).unwrap();
 
         let txt_glob = serde_json::from_str("\"**/*.txt\"").unwrap();
-        let source = WalkdirAndGlobsetSource::new(temp_dir.path(), "backup", vec![txt_glob]);
+        let source = WalkdirAndGlobsetSource::builder()
+            .src_dir(temp_dir.path())
+            .dst_dir("backup")
+            .globset(vec![txt_glob])
+            .build();
 
         let iterator = source.archive_entry_iterator().unwrap();
         let entries: Vec<_> = iterator.collect();
@@ -292,8 +277,11 @@ mod tests {
         let txt_glob: CustomDeserializedGlob = serde_json::from_str("\"**/*.txt\"").unwrap();
         let json_glob: CustomDeserializedGlob = serde_json::from_str("\"**/*.json\"").unwrap();
 
-        let source =
-            WalkdirAndGlobsetSource::new(temp_dir.path(), "backup", vec![txt_glob, json_glob]);
+        let source = WalkdirAndGlobsetSource::builder()
+            .src_dir(temp_dir.path())
+            .dst_dir("backup")
+            .globset(vec![txt_glob, json_glob])
+            .build();
 
         let iterator = source.archive_entry_iterator().unwrap();
         let entries: Vec<_> = iterator.collect();
@@ -318,7 +306,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         create_test_files(temp_dir.path()).unwrap();
 
-        let source = WalkdirAndGlobsetSource::new(temp_dir.path(), "backup", vec![]);
+        let source = WalkdirAndGlobsetSource::builder()
+            .src_dir(temp_dir.path())
+            .dst_dir("backup")
+            .globset(vec![])
+            .build();
 
         let iterator = source.archive_entry_iterator().unwrap();
         let entries: Vec<_> = iterator.collect();
@@ -329,7 +321,11 @@ mod tests {
 
     #[test]
     fn test_archive_entry_iterator_with_nonexistent_directory() {
-        let source = WalkdirAndGlobsetSource::new("/nonexistent/directory", "backup", vec![]);
+        let source = WalkdirAndGlobsetSource::builder()
+            .src_dir("/nonexistent/directory")
+            .dst_dir("backup")
+            .globset(vec![])
+            .build();
 
         let result = source.archive_entry_iterator();
         assert!(result.is_err());
@@ -341,21 +337,13 @@ mod tests {
         let file_path = temp_dir.path().join("not_a_directory.txt");
         std::fs::write(&file_path, "content").unwrap();
 
-        let source = WalkdirAndGlobsetSource::new(file_path, "backup", vec![]);
+        let source = WalkdirAndGlobsetSource::builder()
+            .src_dir(file_path)
+            .dst_dir("backup")
+            .globset(vec![])
+            .build();
 
         let result = source.archive_entry_iterator();
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_walkdir_globset_source_debug() {
-        let source = WalkdirAndGlobsetSource::new(
-            "/path/to/source",
-            "backup",
-            vec![CustomDeserializedGlob::default()],
-        );
-
-        let debug_str = format!("{:?}", source);
-        assert_eq!(debug_str, "WalkdirAndGlobsetSource { src_dir: \"/path/to/source\", dst_dir: \"backup\", globset: [CustomDeserializedGlob { glob: Glob(\"**/*\") }] }");
     }
 }

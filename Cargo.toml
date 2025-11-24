@@ -30,9 +30,13 @@ indent = "0.1.1"
 cron-parser = "0.11.0"
 clap = { version = "4.5.53", features = ["derive"] }
 thiserror-ext = "0.3.0"
-derive-ctor = "1.0.6"
+bon = "3.8.1"
+getset = "0.1.3"
 saturating_cast = "0.1.0"
 sanitize-filename = "0.6.0"
 dyn-iter = "1.0.1"
 function_name = "0.3.0"
 lettre = { version = "0.11.19", features = ["serde"] }
+
+[dev-dependencies]
+maik = "0.2.0"

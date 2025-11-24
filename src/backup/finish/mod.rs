@@ -1,3 +1,8 @@
+//! Finish trait for completing streaming operations.
+//!
+//! Provides a unified interface for finalizing streaming writers like
+//! compression and encryption streams.
+
 use age::stream::StreamWriter;
 use liblzma::write::XzEncoder;
 use std::io::{Error, Write};

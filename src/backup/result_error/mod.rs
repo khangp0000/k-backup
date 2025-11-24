@@ -1,3 +1,8 @@
+//! Error handling and result types.
+//!
+//! Provides unified error types and helper traits for adding context
+//! to errors throughout the backup system.
+
 use std::borrow::Cow;
 
 pub mod error;

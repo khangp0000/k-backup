@@ -3,6 +3,8 @@ use crate::backup::compress::CompressorConfig;
 use crate::backup::encrypt::EncryptorConfig;
 use crate::backup::file_ext::FileExtProvider;
 use crate::backup::tar;
+use bon::Builder;
+use getset::Getters;
 
 use crate::backup::result_error::error::Error;
 use crate::backup::result_error::result::convert_error_vec;
@@ -33,44 +35,62 @@ use crate::backup::validate::validate_valid_archive_base_name;
 use crate::backup::validate::validate_writable_dir;
 
 /// Main configuration structure for the backup system
+///
+/// Contains all settings needed to run automated backups including:
+/// - Scheduling (cron expressions)
+/// - File sources (databases, directories)
+/// - Compression and encryption settings
+/// - Retention policies
+/// - Notification configuration
 #[skip_serializing_none]
-#[derive(Clone, Serialize, Deserialize, Debug, Validate)]
+#[derive(Clone, Serialize, Deserialize, Debug, Validate, Builder, Getters)]
 #[serde(deny_unknown_fields)]
 #[serde_as]
+#[getset(get = "pub")]
 pub struct BackupConfig {
     /// Cron expression defining backup schedule (UTC timezone)
     #[validate(custom(function = validate_cron_str))]
-    pub cron: String,
+    #[builder(into)]
+    cron: String,
 
     /// Base name for backup archive files
     #[validate(custom(function = validate_valid_archive_base_name))]
-    pub archive_base_name: String,
+    #[builder(into)]
+    archive_base_name: String,
 
     /// Directory where backup files will be created
     #[validate(custom(function = validate_writable_dir))]
-    pub out_dir: PathBuf,
+    #[builder(into)]
+    out_dir: PathBuf,
 
     /// List of files and directories to include in backups
     #[validate(length(min = 1), nested)]
-    pub files: ArcVec<ArchiveEntryConfig>,
+    #[builder(into)]
+    files: ArcVec<ArchiveEntryConfig>,
 
     /// List of notifications configuration
     #[validate(nested)]
     #[serde(default)]
-    pub notifications: ArcVec<NotificationConfig>,
+    #[builder(default = ArcVec::default(), into)]
+    notifications: ArcVec<NotificationConfig>,
 
     /// Compression configuration
     #[validate(nested)]
-    pub compressor: CompressorConfig,
+    #[builder(into)]
+    compressor: CompressorConfig,
 
     /// Encryption configuration
     #[validate(nested)]
-    pub encryptor: EncryptorConfig,
+    #[builder(into)]
+    encryptor: EncryptorConfig,
 
     /// Optional retention policy for automatic cleanup
     #[validate(nested)]
-    pub retention: Option<RetentionConfig>,
+    #[builder(into)]
+    retention: Option<RetentionConfig>,
 }
+
+
 
 static TIME_FORMAT: &str = "%Y-%m-%dT%Hh%Mm%Ss%z";
 
@@ -78,8 +98,8 @@ impl FileExtProvider for BackupConfig {
     fn file_ext(&self) -> Option<impl AsRef<str>> {
         Some(
             std::iter::once("tar")
-                .chain(self.compressor.file_ext().iter().map(|s| s.as_ref()))
-                .chain(self.encryptor.file_ext().iter().map(|s| s.as_ref()))
+                .chain(self.compressor().file_ext().iter().map(|s| s.as_ref()))
+                .chain(self.encryptor().file_ext().iter().map(|s| s.as_ref()))
                 .collect::<Vec<_>>()
                 .join("."),
         )
@@ -110,7 +130,7 @@ impl BackupConfig {
                 if !file_name.ends_with(&end) {
                     return None;
                 }
-                let start = format!("{}.", self.archive_base_name);
+                let start = format!("{}.", self.archive_base_name());
                 if !file_name.starts_with(&start) {
                     return None;
                 }
@@ -119,10 +139,10 @@ impl BackupConfig {
                 (start_idx, end_idx)
             }
             None => {
-                if !file_name.starts_with(&format!("{}.", self.archive_base_name)) {
+                if !file_name.starts_with(&format!("{}.", self.archive_base_name())) {
                     return None;
                 }
-                let start_idx = self.archive_base_name.len() + 1;
+                let start_idx = self.archive_base_name().len() + 1;
                 let end_idx = file_name.len();
                 (start_idx, end_idx)
             }
@@ -147,7 +167,7 @@ impl BackupConfig {
         pre_process_pool: Arc<ThreadPool>,
     ) -> (JoinHandle<Result<()>>, Receiver<Result<ArchiveEntry>>) {
         let (result_tx, result_rx) = sync_channel(pre_process_pool.current_num_threads());
-        let entries_configs = self.files.clone();
+        let entries_configs = self.files().clone();
         let handle = std::thread::spawn(move || {
             convert_error_vec(pre_process_pool.install(|| {
                 entries_configs
@@ -192,17 +212,21 @@ impl BackupConfig {
 
         let (entry_handle, entry_rx) = self.spawn_entry_collector(pre_process_pool);
 
-        let file_name = format!("{}.{}", self.archive_base_name, self.time_file_ext(dt),);
+        let file_name = format!("{}.{}", self.archive_base_name(), self.time_file_ext(dt),);
         tracing::info!("Creating archive file: {}", file_name);
         let config_clone = self.clone();
 
         let archive_handle = std::thread::spawn(move || -> Result<NamedTempFile> {
-            tar::create_tar_and_process(entry_rx, &config_clone.encryptor, &config_clone.compressor)
+            tar::create_tar_and_process(
+                entry_rx,
+                config_clone.encryptor(),
+                config_clone.compressor(),
+            )
         });
 
         let archive_create_res = match archive_handle.join().unwrap() {
             Ok(temp_file) => {
-                let file_path = self.out_dir.join(file_name);
+                let file_path = self.out_dir().join(file_name);
                 tracing::info!("Finalizing archive: moving from temp to final location");
                 temp_file
                     .persist(&file_path)
@@ -234,7 +258,7 @@ impl BackupConfig {
         now: DateTime<Utc>,
         pre_process_pool: Arc<ThreadPool>,
     ) -> Result<DateTime<Utc>> {
-        if let Some(retention) = &self.retention {
+        if let Some(retention) = self.retention() {
             let backups_to_delete = retention
                 .get_delete(backup_set.iter(), now)
                 .into_iter()
@@ -247,18 +271,18 @@ impl BackupConfig {
                 );
             }
             backups_to_delete.into_iter().for_each(|to_delete| {
-                tracing::info!("Removing expired backup: {:?}", &to_delete.item);
+                tracing::info!("Removing expired backup: {:?}", to_delete.item());
                 let removed = backup_set.remove(&to_delete);
                 if !removed {
-                    panic!("Remove item in memory {:?} failed", &to_delete.item);
+                    panic!("Remove item in memory {:?} failed", to_delete.item());
                 }
-                let _ = std::fs::remove_file(&to_delete.item);
+                let _ = std::fs::remove_file(to_delete.item());
             });
         }
 
         tracing::info!(
             "Starting backup creation for {} file sources",
-            self.files.len()
+            self.files().len()
         );
         let (file_path, non_fatal_error) = self.create_archive(now, pre_process_pool)?;
 
@@ -279,7 +303,7 @@ impl BackupConfig {
                 now.with_timezone(&Local).format(TIME_FORMAT)
             );
             let notification_errors = self
-                .notifications
+                .notifications()
                 .iter()
                 .map(|notification| notification.send(&topic, &non_fatal_error))
                 .filter_map(|res| res.err())
@@ -293,10 +317,15 @@ impl BackupConfig {
             }
         }
 
-        backup_set.insert(Rc::new(ItemWithDateTime::from((file_path, now))));
+        backup_set.insert(Rc::new(
+            ItemWithDateTime::builder()
+                .item(file_path)
+                .date_time(now)
+                .build(),
+        ));
         tracing::info!("Total backups now: {}", backup_set.len());
 
-        let next_backup = cron_parser::parse(&self.cron, &now).unwrap();
+        let next_backup = cron_parser::parse(self.cron(), &now).unwrap();
         tracing::info!("Next backup scheduled for: {}", next_backup);
 
         Ok(next_backup)
@@ -304,25 +333,29 @@ impl BackupConfig {
 
     /// Main daemon loop that runs backups on schedule
     pub fn start_loop(&self, pre_process_pool: Arc<ThreadPool>) -> Result<()> {
-        tracing::info!("Starting backup daemon with cron schedule: {}", self.cron);
-        tracing::info!("Backup output directory: {:?}", self.out_dir);
-        tracing::info!("Archive base name: {}", self.archive_base_name);
+        tracing::info!("Starting backup daemon with cron schedule: {}", self.cron());
+        tracing::info!("Backup output directory: {:?}", self.out_dir());
+        tracing::info!("Archive base name: {}", self.archive_base_name());
 
-        let mut set: HashSet<_> = read_dir(&self.out_dir)?
+        let mut set: HashSet<_> = read_dir(self.out_dir())?
             .filter_map(|r| r.ok())
             .filter_map(|r| {
-                self.get_date_time_from_file_path(r.path())
-                    .map(|dt| ItemWithDateTime::from((r.path(), dt)))
+                self.get_date_time_from_file_path(r.path()).map(|dt| {
+                    ItemWithDateTime::builder()
+                        .item(r.path())
+                        .date_time(dt)
+                        .build()
+                })
             })
             .map(Rc::new)
             .collect();
 
         tracing::info!("Found {} existing backup files", set.len());
 
-        let cron = &self.cron;
+        let cron = self.cron();
         let mut start = set
             .iter()
-            .map(|i| i.date_time)
+            .map(|i| *i.date_time())
             .sorted_unstable()
             .next_back()
             .map(|start| cron_parser::parse(cron, &start).unwrap())
@@ -354,16 +387,14 @@ mod tests {
     fn create_test_config() -> BackupConfig {
         let temp_dir = TempDir::new().unwrap();
 
-        BackupConfig {
-            cron: "0 1 * * *".to_string(),
-            archive_base_name: "test_backup".to_string(),
-            out_dir: temp_dir.path().to_path_buf(),
-            files: vec![].into(),
-            notifications: vec![].into(),
-            compressor: CompressorConfig::None,
-            encryptor: EncryptorConfig::None,
-            retention: None,
-        }
+        BackupConfig::builder()
+            .cron("0 1 * * *")
+            .archive_base_name("test_backup")
+            .out_dir(temp_dir.path().to_path_buf())
+            .files(vec![])
+            .compressor(CompressorConfig::None)
+            .encryptor(EncryptorConfig::None)
+            .build()
     }
 
     #[test]
@@ -452,16 +483,14 @@ mod tests {
     fn test_backup_config_invalid_cron() {
         let temp_dir = TempDir::new().unwrap();
 
-        let config = BackupConfig {
-            cron: "invalid cron".to_string(),
-            archive_base_name: "test".to_string(),
-            out_dir: temp_dir.path().to_path_buf(),
-            files: vec![].into(),
-            notifications: vec![].into(),
-            compressor: CompressorConfig::None,
-            encryptor: EncryptorConfig::None,
-            retention: None,
-        };
+        let config = BackupConfig::builder()
+            .cron("invalid cron".to_string())
+            .archive_base_name("test".to_string())
+            .out_dir(temp_dir.path().to_path_buf())
+            .files(ArcVec::<ArchiveEntryConfig>::from(vec![]))
+            .compressor(CompressorConfig::None)
+            .encryptor(EncryptorConfig::None)
+            .build();
 
         assert!(config.validate().is_err());
     }
@@ -478,26 +507,25 @@ mod tests {
         let backup_dir = temp_dir.path().join("backup");
         create_dir_all(&backup_dir).unwrap();
 
-        let config = BackupConfig {
-            cron: "0 1 * * *".to_string(),
-            archive_base_name: "test_backup".to_string(),
-            out_dir: backup_dir.clone(),
-            files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
-                "test content",
-                PathBuf::from("test.txt"),
-            ))]
-            .into(),
-            notifications: vec![].into(),
-            compressor: CompressorConfig::None,
-            encryptor: EncryptorConfig::None,
-            retention: Some(RetentionConfig {
-                default_retention: StdDuration::from_secs(2 * 24 * 3600), // 2 days
-                daily_retention: None,
-                monthly_retention: None,
-                yearly_retention: None,
-                min_backups: 1,
-            }),
-        };
+        let config = BackupConfig::builder()
+            .cron("0 1 * * *".to_string())
+            .archive_base_name("test_backup".to_string())
+            .out_dir(backup_dir.clone())
+            .files(ArcVec::from(vec![ArchiveEntryConfig::Base64(
+                Base64Source::builder()
+                    .content("test content")
+                    .dst(PathBuf::from("test.txt"))
+                    .build(),
+            )]))
+            .compressor(CompressorConfig::None)
+            .encryptor(EncryptorConfig::None)
+            .retention(
+                RetentionConfig::builder()
+                    .default_retention(StdDuration::from_secs(2 * 24 * 3600))
+                    .min_backups(1)
+                    .build(),
+            )
+            .build();
 
         let pool = Arc::new(ThreadPoolBuilder::new().num_threads(1).build().unwrap());
         let mut backup_set = HashSet::new();
@@ -518,14 +546,18 @@ mod tests {
         write(&recent_backup_path, "recent backup content").unwrap();
 
         // Add them to backup set
-        backup_set.insert(Rc::new(ItemWithDateTime::from((
-            old_backup_path.clone(),
-            now - chrono::Duration::days(5),
-        ))));
-        backup_set.insert(Rc::new(ItemWithDateTime::from((
-            recent_backup_path.clone(),
-            now - chrono::Duration::hours(12),
-        ))));
+        backup_set.insert(Rc::new(
+            ItemWithDateTime::builder()
+                .item(old_backup_path.clone())
+                .date_time(now - chrono::Duration::days(5))
+                .build(),
+        ));
+        backup_set.insert(Rc::new(
+            ItemWithDateTime::builder()
+                .item(recent_backup_path.clone())
+                .date_time(now - chrono::Duration::hours(12))
+                .build(),
+        ));
 
         assert_eq!(backup_set.len(), 2);
         assert!(old_backup_path.exists());
@@ -543,9 +575,9 @@ mod tests {
         assert_eq!(backup_set.len(), 2); // recent backup + new backup
         let new_backup = backup_set
             .iter()
-            .find(|item| item.date_time == now)
+            .find(|item| *item.date_time() == now)
             .expect("New backup should be in set");
-        assert!(new_backup.item.exists(), "New backup file should exist");
+        assert!(new_backup.item().exists(), "New backup file should exist");
 
         // Verify next backup time is in the future
         assert!(next_backup > now);
@@ -563,26 +595,26 @@ mod tests {
         let backup_dir = temp_dir.path().join("backup");
         create_dir_all(&backup_dir).unwrap();
 
-        let config = BackupConfig {
-            cron: "0 1 * * *".to_string(),
-            archive_base_name: "test_backup".to_string(),
-            out_dir: backup_dir.clone(),
-            files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
-                "test content",
-                PathBuf::from("test.txt"),
-            ))]
-            .into(),
-            notifications: vec![].into(),
-            compressor: CompressorConfig::None,
-            encryptor: EncryptorConfig::None,
-            retention: Some(RetentionConfig {
-                default_retention: StdDuration::from_secs(3 * 24 * 3600), // 3 days
-                daily_retention: Some(StdDuration::from_secs(7 * 24 * 3600)), // 7 days
-                monthly_retention: None,
-                yearly_retention: None,
-                min_backups: 2,
-            }),
-        };
+        let config = BackupConfig::builder()
+            .cron("0 1 * * *".to_string())
+            .archive_base_name("test_backup".to_string())
+            .out_dir(backup_dir.clone())
+            .files(ArcVec::from(vec![ArchiveEntryConfig::Base64(
+                Base64Source::builder()
+                    .content("test content")
+                    .dst(PathBuf::from("test.txt"))
+                    .build(),
+            )]))
+            .compressor(CompressorConfig::None)
+            .encryptor(EncryptorConfig::None)
+            .retention(
+                RetentionConfig::builder()
+                    .default_retention(StdDuration::from_secs(3 * 24 * 3600))
+                    .daily_retention(StdDuration::from_secs(7 * 24 * 3600))
+                    .min_backups(2)
+                    .build(),
+            )
+            .build();
 
         let pool = Arc::new(ThreadPoolBuilder::new().num_threads(1).build().unwrap());
         let mut backup_set = HashSet::new();
@@ -608,18 +640,24 @@ mod tests {
         write(&recent_path, "recent backup").unwrap();
 
         // Add them to backup set
-        backup_set.insert(Rc::new(ItemWithDateTime::from((
-            very_old_path.clone(),
-            now - chrono::Duration::days(10),
-        ))));
-        backup_set.insert(Rc::new(ItemWithDateTime::from((
-            old_but_daily_kept_path.clone(),
-            now - chrono::Duration::days(5),
-        ))));
-        backup_set.insert(Rc::new(ItemWithDateTime::from((
-            recent_path.clone(),
-            now - chrono::Duration::hours(12),
-        ))));
+        backup_set.insert(Rc::new(
+            ItemWithDateTime::builder()
+                .item(very_old_path.clone())
+                .date_time(now - chrono::Duration::days(10))
+                .build(),
+        ));
+        backup_set.insert(Rc::new(
+            ItemWithDateTime::builder()
+                .item(old_but_daily_kept_path.clone())
+                .date_time(now - chrono::Duration::days(5))
+                .build(),
+        ));
+        backup_set.insert(Rc::new(
+            ItemWithDateTime::builder()
+                .item(recent_path.clone())
+                .date_time(now - chrono::Duration::hours(12))
+                .build(),
+        ));
 
         assert_eq!(backup_set.len(), 3);
         assert!(very_old_path.exists());
@@ -648,9 +686,9 @@ mod tests {
         assert_eq!(backup_set.len(), 3); // old_but_daily_kept + recent + new backup
         let new_backup = backup_set
             .iter()
-            .find(|item| item.date_time == now)
+            .find(|item| *item.date_time() == now)
             .expect("New backup should be in set");
-        assert!(new_backup.item.exists(), "New backup file should exist");
+        assert!(new_backup.item().exists(), "New backup file should exist");
 
         // Verify next backup time is in the future
         assert!(next_backup > now);
@@ -668,26 +706,25 @@ mod tests {
         let backup_dir = temp_dir.path().join("backup");
         create_dir_all(&backup_dir).unwrap();
 
-        let config = BackupConfig {
-            cron: "0 1 * * *".to_string(),
-            archive_base_name: "test_backup".to_string(),
-            out_dir: backup_dir.clone(),
-            files: vec![ArchiveEntryConfig::Base64(Base64Source::new(
-                "test content",
-                PathBuf::from("test.txt"),
-            ))]
-            .into(),
-            notifications: vec![].into(),
-            compressor: CompressorConfig::None,
-            encryptor: EncryptorConfig::None,
-            retention: Some(RetentionConfig {
-                default_retention: StdDuration::from_secs(1), // 1 second (very short)
-                daily_retention: None,
-                monthly_retention: None,
-                yearly_retention: None,
-                min_backups: 3, // Safety net
-            }),
-        };
+        let config = BackupConfig::builder()
+            .cron("0 1 * * *".to_string())
+            .archive_base_name("test_backup".to_string())
+            .out_dir(backup_dir.clone())
+            .files(ArcVec::from(vec![ArchiveEntryConfig::Base64(
+                Base64Source::builder()
+                    .content("test content")
+                    .dst(PathBuf::from("test.txt"))
+                    .build(),
+            )]))
+            .compressor(CompressorConfig::None)
+            .encryptor(EncryptorConfig::None)
+            .retention(
+                RetentionConfig::builder()
+                    .default_retention(StdDuration::from_secs(1))
+                    .min_backups(3)
+                    .build(),
+            )
+            .build();
 
         let pool = Arc::new(ThreadPoolBuilder::new().num_threads(1).build().unwrap());
         let mut backup_set = HashSet::new();
@@ -706,14 +743,18 @@ mod tests {
         write(&old_backup1_path, "old backup 1").unwrap();
         write(&old_backup2_path, "old backup 2").unwrap();
 
-        backup_set.insert(Rc::new(ItemWithDateTime::from((
-            old_backup1_path.clone(),
-            now - chrono::Duration::days(1),
-        ))));
-        backup_set.insert(Rc::new(ItemWithDateTime::from((
-            old_backup2_path.clone(),
-            now - chrono::Duration::days(2),
-        ))));
+        backup_set.insert(Rc::new(
+            ItemWithDateTime::builder()
+                .item(old_backup1_path.clone())
+                .date_time(now - chrono::Duration::days(1))
+                .build(),
+        ));
+        backup_set.insert(Rc::new(
+            ItemWithDateTime::builder()
+                .item(old_backup2_path.clone())
+                .date_time(now - chrono::Duration::days(2))
+                .build(),
+        ));
 
         assert_eq!(backup_set.len(), 2);
         assert!(old_backup1_path.exists());
@@ -738,9 +779,9 @@ mod tests {
         assert_eq!(backup_set.len(), 3); // 2 old + 1 new = 3 (exactly min_backups)
         let new_backup = backup_set
             .iter()
-            .find(|item| item.date_time == now)
+            .find(|item| *item.date_time() == now)
             .expect("New backup should be in set");
-        assert!(new_backup.item.exists(), "New backup file should exist");
+        assert!(new_backup.item().exists(), "New backup file should exist");
 
         assert!(next_backup > now);
     }
@@ -752,7 +793,8 @@ mod tests {
             CustomDeserializedGlob, WalkdirAndGlobsetSource,
         };
         use crate::backup::compress::xz::XzConfig;
-        use crate::backup::encrypt::age::{AgeEncryptorConfig, RedactedString};
+        use crate::backup::encrypt::age::AgeEncryptorConfig;
+        use crate::backup::redacted::RedactedString;
         use ::tar::Archive;
         use age::Decryptor;
 
@@ -774,29 +816,32 @@ mod tests {
         let txt_glob: CustomDeserializedGlob = serde_json::from_str("\"**/*.txt\"").unwrap();
         let passphrase = "test-passphrase-123";
 
-        let config = BackupConfig {
-            cron: "0 1 * * *".to_string(),
-            archive_base_name: "test_backup".to_string(),
-            out_dir: backup_dir.clone(),
-            files: vec![
-                ArchiveEntryConfig::Base64(Base64Source::new(
-                    "base64 content",
-                    PathBuf::from("base64.txt"),
-                )),
-                ArchiveEntryConfig::new_glob(WalkdirAndGlobsetSource::new(
-                    source_dir.clone(),
-                    "",
-                    vec![txt_glob],
-                )),
-            ]
-            .into(),
-            notifications: vec![].into(),
-            compressor: CompressorConfig::Xz(XzConfig::new(6, 2)),
-            encryptor: EncryptorConfig::Age(AgeEncryptorConfig::Passphrase {
-                passphrase: RedactedString::new(passphrase),
-            }),
-            retention: None,
-        };
+        let config = BackupConfig::builder()
+            .cron("0 1 * * *".to_string())
+            .archive_base_name("test_backup".to_string())
+            .out_dir(backup_dir.clone())
+            .files(ArcVec::from(vec![
+                ArchiveEntryConfig::Base64(
+                    Base64Source::builder()
+                        .content("base64 content")
+                        .dst(PathBuf::from("base64.txt"))
+                        .build(),
+                ),
+                ArchiveEntryConfig::Glob(
+                    WalkdirAndGlobsetSource::builder()
+                        .src_dir(source_dir.clone())
+                        .dst_dir("")
+                        .globset(vec![txt_glob])
+                        .build(),
+                ),
+            ]))
+            .compressor(CompressorConfig::Xz(
+                XzConfig::builder().level(6).thread(2).build(),
+            ))
+            .encryptor(EncryptorConfig::Age(AgeEncryptorConfig::Passphrase {
+                passphrase: RedactedString::builder().inner(passphrase).build(),
+            }))
+            .build();
 
         let pool = Arc::new(ThreadPoolBuilder::new().num_threads(2).build().unwrap());
         let dt = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
