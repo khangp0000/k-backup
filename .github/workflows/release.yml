@@ -2,9 +2,8 @@ name: Release
 
 on:
   workflow_dispatch:
-  # Uncomment for daily schedule:
-  # schedule:
-  #   - cron: "0 3 * * *"
+  schedule:
+    - cron: "0 3 * * 0"
 
 permissions:
   contents: write
