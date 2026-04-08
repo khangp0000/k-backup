@@ -19,6 +19,10 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Cargo update
@@ -54,31 +58,18 @@ jobs:
             os: ubuntu-latest
             artifact: k_backup-linux-amd64
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             artifact: k_backup-linux-arm64
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            artifact: k_backup-darwin-amd64
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            artifact: k_backup-darwin-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.update-and-tag.outputs.tag }}
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
 
-      - name: Install cross-compilation deps (aarch64-linux)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
-          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
