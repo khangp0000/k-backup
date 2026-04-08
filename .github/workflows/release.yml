@@ -31,9 +31,6 @@ jobs:
       - name: Cargo update
         run: cargo update
 
-      - name: Run tests
-        run: cargo test
-
       - name: Check for changes since last release
         id: check
         run: |
@@ -44,6 +41,10 @@ jobs:
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
             echo "No changes since $LAST_TAG, skipping release."
           fi
+
+      - name: Run tests
+        if: steps.check.outputs.has_changes == 'true'
+        run: cargo test
 
       - name: Generate tag and push
         if: steps.check.outputs.has_changes == 'true'
