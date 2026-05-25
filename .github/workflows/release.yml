@@ -22,9 +22,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
-
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Cargo update
@@ -43,7 +40,23 @@ jobs:
 
       - name: Run tests
         if: steps.check.outputs.has_changes == 'true'
-        run: cargo test
+        run: cargo test --release --features "fully-static vendored-openssl"
+
+      - name: Build release binary
+        if: steps.check.outputs.has_changes == 'true'
+        run: cargo build --release --features fully-static
+
+      - name: Upload x86_64 artifact
+        if: steps.check.outputs.has_changes == 'true'
+        run: |
+          mkdir -p dist
+          cp target/release/${{ env.BINARY_NAME }} dist/k_backup-linux-amd64
+
+      - uses: actions/upload-artifact@v4
+        if: steps.check.outputs.has_changes == 'true'
+        with:
+          name: k_backup-linux-amd64
+          path: dist/k_backup-linux-amd64
 
       - name: Generate tag and push
         if: steps.check.outputs.has_changes == 'true'
@@ -61,44 +74,32 @@ jobs:
           git tag "$TAG"
           git push origin HEAD --tags
 
-  build:
+  build-arm64:
     needs: update-and-tag
     if: needs.update-and-tag.outputs.has_changes == 'true'
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            artifact: k_backup-linux-amd64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
-            artifact: k_backup-linux-arm64
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.update-and-tag.outputs.tag }}
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
-
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --features fully-static
 
       - name: Package
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} dist/${{ matrix.artifact }}
+          cp target/release/${{ env.BINARY_NAME }} dist/k_backup-linux-arm64
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}
+          name: k_backup-linux-arm64
+          path: dist/k_backup-linux-arm64
 
   release:
-    needs: [update-and-tag, build]
+    needs: [update-and-tag, build-arm64]
     if: needs.update-and-tag.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     steps:
