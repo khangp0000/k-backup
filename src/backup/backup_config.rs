@@ -48,10 +48,12 @@ use crate::backup::validate::validate_writable_dir;
 #[serde_as]
 #[getset(get = "pub")]
 pub struct BackupConfig {
-    /// Cron expression defining backup schedule (UTC timezone)
+    /// Cron expression defining backup schedule (UTC timezone).
+    /// If omitted, the backup runs once and exits.
     #[validate(custom(function = validate_cron_str))]
     #[builder(into)]
-    cron: String,
+    #[serde(default)]
+    cron: Option<String>,
 
     /// Base name for backup archive files
     #[validate(custom(function = validate_valid_archive_base_name))]
@@ -325,15 +327,46 @@ impl BackupConfig {
         ));
         tracing::info!("Total backups now: {}", backup_set.len());
 
-        let next_backup = cron_parser::parse(self.cron(), &now).unwrap();
+        let next_backup = cron_parser::parse(self.cron().as_ref().unwrap(), &now).unwrap();
         tracing::info!("Next backup scheduled for: {}", next_backup);
 
         Ok(next_backup)
     }
 
+    /// Executes a single backup: retention cleanup, archive creation, then exit.
+    pub fn run_once(&self, pre_process_pool: Arc<ThreadPool>) -> Result<()> {
+        tracing::info!("Running single backup cycle");
+        tracing::info!("Backup output directory: {:?}", self.out_dir());
+        tracing::info!("Archive base name: {}", self.archive_base_name());
+
+        let mut set: HashSet<_> = read_dir(self.out_dir())?
+            .filter_map(|r| r.ok())
+            .filter_map(|r| {
+                self.get_date_time_from_file_path(r.path()).map(|dt| {
+                    ItemWithDateTime::builder()
+                        .item(r.path())
+                        .date_time(dt)
+                        .build()
+                })
+            })
+            .map(Rc::new)
+            .collect();
+
+        tracing::info!("Found {} existing backup files", set.len());
+        let now = Utc::now();
+        self.execute_backup_cycle(&mut set, now, pre_process_pool)?;
+        Ok(())
+    }
+
     /// Main daemon loop that runs backups on schedule
     pub fn start_loop(&self, pre_process_pool: Arc<ThreadPool>) -> Result<()> {
-        tracing::info!("Starting backup daemon with cron schedule: {}", self.cron());
+        let cron = self.cron().as_ref().ok_or_else(|| {
+            Error::from(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "cron field is required for daemon mode",
+            ))
+        })?;
+        tracing::info!("Starting backup daemon with cron schedule: {}", cron);
         tracing::info!("Backup output directory: {:?}", self.out_dir());
         tracing::info!("Archive base name: {}", self.archive_base_name());
 
@@ -352,7 +385,7 @@ impl BackupConfig {
 
         tracing::info!("Found {} existing backup files", set.len());
 
-        let cron = self.cron();
+        let cron = cron.as_str();
         let mut start = set
             .iter()
             .map(|i| *i.date_time())

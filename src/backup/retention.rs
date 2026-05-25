@@ -38,21 +38,21 @@ pub struct RetentionConfig {
     ///
     /// The most recent backup from each day within this period is preserved.
     /// Example: "7days" keeps one backup per day for the last week.
-    #[serde(with = "humantime_serde")]
+    #[serde(default, with = "humantime_serde")]
     daily_retention: Option<std::time::Duration>,
 
     /// How long to keep monthly backups (one per month)
     ///
     /// The most recent backup from each month within this period is preserved.
     /// Example: "3months" keeps one backup per month for the last 3 months.
-    #[serde(with = "humantime_serde")]
+    #[serde(default, with = "humantime_serde")]
     monthly_retention: Option<std::time::Duration>,
 
     /// How long to keep yearly backups (one per year)
     ///
     /// The most recent backup from each year within this period is preserved.
     /// Example: "5years" keeps one backup per year for the last 5 years.
-    #[serde(with = "humantime_serde")]
+    #[serde(default, with = "humantime_serde")]
     yearly_retention: Option<std::time::Duration>,
 
     /// Minimum number of backups to always keep

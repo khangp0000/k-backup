@@ -44,6 +44,7 @@ vendored-openssl = ["dep:openssl-sys", "openssl-sys/vendored"]
 bundled-sqlite = ["rusqlite/bundled"]
 static-lzma = ["liblzma/static"]
 fully-static = ["bundled-sqlite", "static-lzma"]
+integration-tests = []
 
 [dev-dependencies]
 maik = "0.2.0"

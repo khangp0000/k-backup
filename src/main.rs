@@ -25,15 +25,12 @@ use std::process::exit;
 #[command(version, about, long_about = None)]
 struct Args {
     /// Path to YAML configuration file
-    ///
-    /// The config file specifies:
-    /// - Backup schedule (cron expression)
-    /// - Source files/directories to backup
-    /// - Output directory and naming
-    /// - Compression and encryption settings
-    /// - Retention policy for old backups
     #[arg(short, long)]
     config: PathBuf,
+
+    /// Run a single backup cycle and exit instead of running as a daemon
+    #[arg(long)]
+    once: bool,
 }
 
 fn main() {
@@ -69,16 +66,20 @@ fn main() {
                 .map(|_| bc)
                 .add_msg(format!("Config validation failed: {:?}", &args.config))
         })
-        // Start the main backup daemon loop
-        // This runs forever, checking cron schedule and creating backups
-        .and_then(|bc| bc.start_loop(thread_pool.into()));
+        // Run backup: once if --once flag or no cron, otherwise daemon loop
+        .and_then(|bc| {
+            if args.once || bc.cron().is_none() {
+                bc.run_once(thread_pool.into())
+            } else {
+                bc.start_loop(thread_pool.into())
+            }
+        });
 
     match res {
-        // The loop should never exit without an error
-        Ok(_) => error!("Loop should never break without error"),
-        Err(e) => error!("{e}"),
+        Ok(_) => {}
+        Err(e) => {
+            error!("{e}");
+            exit(1);
+        }
     }
-
-    // Exit with error code if we reach here
-    exit(1);
 }
