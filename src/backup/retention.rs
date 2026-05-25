@@ -41,6 +41,13 @@ pub struct RetentionConfig {
     #[serde(default, with = "humantime_serde")]
     daily_retention: Option<std::time::Duration>,
 
+    /// How long to keep weekly backups (one per week)
+    ///
+    /// The most recent backup from each ISO week within this period is preserved.
+    /// Example: "8weeks" keeps one backup per week for the last 8 weeks.
+    #[serde(default, with = "humantime_serde")]
+    weekly_retention: Option<std::time::Duration>,
+
     /// How long to keep monthly backups (one per month)
     ///
     /// The most recent backup from each month within this period is preserved.
@@ -91,23 +98,19 @@ impl RetentionConfig {
         I: IntoIterator<Item = II>,
     {
         let default_retention = Duration::from_std(self.default_retention).unwrap();
-        let daily_retention = self
-            .daily_retention
-            .map(Duration::from_std)
-            .map(Result::unwrap);
-        let monthly_retention = self
-            .monthly_retention
-            .map(Duration::from_std)
-            .map(Result::unwrap);
-        let yearly_retention = self
-            .yearly_retention
-            .map(Duration::from_std)
-            .map(Result::unwrap);
-        let mut last_keep = None;
+        let daily_retention = self.daily_retention.map(|d| Duration::from_std(d).unwrap());
+        let weekly_retention = self.weekly_retention.map(|d| Duration::from_std(d).unwrap());
+        let monthly_retention = self.monthly_retention.map(|d| Duration::from_std(d).unwrap());
+        let yearly_retention = self.yearly_retention.map(|d| Duration::from_std(d).unwrap());
+
+        let mut last_keep_daily = None;
+        let mut last_keep_weekly = None;
+        let mut last_keep_monthly = None;
+        let mut last_keep_yearly = None;
 
         let mut all_items: Vec<_> = iter.into_iter().collect::<Vec<_>>();
 
-        // Decrease time sorting
+        // Sort newest first — so the first backup seen in each period is the latest
         all_items.sort_by(|a, b| b.as_ref().date_time.cmp(&a.as_ref().date_time));
 
         tracing::info!(
@@ -132,35 +135,17 @@ impl RetentionConfig {
             .into_iter()
             .filter(move |r| {
                 let utc_date_time = r.as_ref().date_time.to_utc();
-                tracing::debug!("Checking backup age: {:?}", utc_date_time);
                 let age = now.signed_duration_since(utc_date_time);
                 if age < default_retention {
-                    tracing::debug!("Backup within default retention, keeping");
                     return false;
                 }
 
-                let should_keep = should_keep(
-                    &utc_date_time,
-                    age,
-                    &mut last_keep,
-                    yearly_retention,
-                    DateTime::year,
-                ) || should_keep(
-                    &utc_date_time,
-                    age,
-                    &mut last_keep,
-                    monthly_retention,
-                    DateTime::month,
-                ) || should_keep(
-                    &utc_date_time,
-                    age,
-                    &mut last_keep,
-                    daily_retention,
-                    DateTime::day,
-                );
+                let keep = should_keep(&utc_date_time, age, &mut last_keep_yearly, yearly_retention, |dt| dt.year())
+                    || should_keep(&utc_date_time, age, &mut last_keep_monthly, monthly_retention, |dt| (dt.year(), dt.month()))
+                    || should_keep(&utc_date_time, age, &mut last_keep_weekly, weekly_retention, |dt| (dt.iso_week().year(), dt.iso_week().week()))
+                    || should_keep(&utc_date_time, age, &mut last_keep_daily, daily_retention, |dt| (dt.year(), dt.month(), dt.day()));
 
-                tracing::debug!("Backup retention decision made");
-                !should_keep
+                !keep
             })
             .collect();
 
@@ -177,26 +162,26 @@ impl RetentionConfig {
     }
 }
 
-fn should_keep<O: Copy, T: TimeZone<Offset = O>, R: Ord, F: Fn(&DateTime<T>) -> R>(
+fn should_keep<T: TimeZone, R: Eq>(
     to_check: &DateTime<T>,
     age: Duration,
-    last_keep: &mut Option<DateTime<T>>,
+    last_keep: &mut Option<R>,
     retention: Option<Duration>,
-    cmp_value_extract_fn: F,
+    period_fn: impl Fn(&DateTime<T>) -> R,
 ) -> bool {
-    tracing::trace!("Retention check - last keep: {:?}", last_keep);
     match retention {
         None => false,
         Some(retention) => {
             if age < retention {
+                let period = period_fn(to_check);
                 match last_keep {
                     None => {
-                        *last_keep = Some(*to_check);
+                        *last_keep = Some(period);
                         true
                     }
-                    Some(last_keep_val) => {
-                        if cmp_value_extract_fn(to_check) < cmp_value_extract_fn(last_keep_val) {
-                            *last_keep = Some(*to_check);
+                    Some(last_period) => {
+                        if period != *last_period {
+                            *last_keep = Some(period);
                             true
                         } else {
                             false

@@ -260,10 +260,31 @@ impl BackupConfig {
         now: DateTime<Utc>,
         pre_process_pool: Arc<ThreadPool>,
     ) -> Result<DateTime<Utc>> {
+        tracing::info!(
+            "Starting backup creation for {} file sources",
+            self.files().len()
+        );
+        let (file_path, non_fatal_error) = self.create_archive(now, pre_process_pool)?;
+
+        let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
+        tracing::info!(
+            "Successfully created backup: {:?} ({} bytes)",
+            &file_path,
+            file_size
+        );
+
+        backup_set.insert(Rc::new(
+            ItemWithDateTime::builder()
+                .item(file_path.clone())
+                .date_time(now)
+                .build(),
+        ));
+
         if let Some(retention) = self.retention() {
             let backups_to_delete = retention
                 .get_delete(backup_set.iter(), now)
                 .into_iter()
+                .filter(|item| *item.as_ref().date_time() != now)
                 .cloned()
                 .collect_vec();
             if !backups_to_delete.is_empty() {
@@ -281,19 +302,6 @@ impl BackupConfig {
                 let _ = std::fs::remove_file(to_delete.item());
             });
         }
-
-        tracing::info!(
-            "Starting backup creation for {} file sources",
-            self.files().len()
-        );
-        let (file_path, non_fatal_error) = self.create_archive(now, pre_process_pool)?;
-
-        let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
-        tracing::info!(
-            "Successfully created backup: {:?} ({} bytes)",
-            &file_path,
-            file_size
-        );
 
         if let Some(non_fatal_error) = non_fatal_error {
             let non_fatal_error =
@@ -319,12 +327,6 @@ impl BackupConfig {
             }
         }
 
-        backup_set.insert(Rc::new(
-            ItemWithDateTime::builder()
-                .item(file_path)
-                .date_time(now)
-                .build(),
-        ));
         tracing::info!("Total backups now: {}", backup_set.len());
 
         let next_backup = cron_parser::parse(self.cron().as_ref().unwrap(), &now).unwrap();
