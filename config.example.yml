@@ -30,7 +30,7 @@ encryptor:
 compressor:
   compressor_type: xz
 retention:
-  default_retention: 0s
+  default_retention: 7days
   daily_retention: 3day
   monthly_retention: 3month
   yearly_retention: 3year

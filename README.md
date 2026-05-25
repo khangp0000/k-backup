@@ -67,6 +67,7 @@ For enterprise environments, consider established solutions like Veeam, Bacula, 
    retention:
      default_retention: 7days
      daily_retention: 30days
+     weekly_retention: 12weeks
      monthly_retention: 12months
      yearly_retention: 5years
      min_backups: 3  # safety net
@@ -77,6 +78,11 @@ For enterprise environments, consider established solutions like Veeam, Bacula, 
    ./target/release/k_backup --config config.yml
    ```
 
+   Or run a single backup and exit (for use with external schedulers):
+   ```bash
+   ./target/release/k_backup --config config.yml --once
+   ```
+
    Or with debug logging:
    ```bash
    RUST_LOG=debug ./target/release/k_backup --config config.yml
@@ -85,12 +91,12 @@ For enterprise environments, consider established solutions like Veeam, Bacula, 
 ## Configuration
 
 ### Scheduling
-- **`cron`**: Standard cron expression for backup timing
+- **`cron`** *(optional)*: Standard cron expression for backup timing. If omitted, runs once and exits.
   - `"0 1 * * *"` - Daily at 1:00 AM UTC
   - `"0 */6 * * *"` - Every 6 hours
   - `"0 2 * * 0"` - Weekly on Sunday at 2:00 AM UTC
 
-**Note**: All times are in UTC, not local time.
+**Note**: All times are in UTC, not local time. Use `--once` or omit `cron` to run with external schedulers.
 
 ### File Sources
 
@@ -158,6 +164,7 @@ Sends email notifications when backup errors occur (non-fatal errors that don't 
 retention:
   default_retention: 7days      # Base retention for all backups
   daily_retention: 30days       # Keep one backup per day for 30 days
+  weekly_retention: 12weeks     # Keep one backup per week for 12 weeks
   monthly_retention: 12months   # Keep one backup per month for 12 months
   yearly_retention: 5years      # Keep one backup per year for 5 years
   min_backups: 3               # Safety net - always keep at least this many
@@ -165,7 +172,7 @@ retention:
 
 Implements sophisticated grandfather-father-son rotation:
 - **Default retention**: Base policy applied to all backups
-- **Daily/Monthly/Yearly**: Preserves the most recent backup from each time period
+- **Daily/Weekly/Monthly/Yearly**: Preserves the most recent backup from each time period
 - **Safety net**: `min_backups` prevents accidental deletion of all backups
 - **Smart cleanup**: Only deletes backups that don't violate any retention rule
 
@@ -311,5 +318,6 @@ This project is licensed under the GNU General Public License v3.0 - see the LIC
 
 ## Version History
 
+- **v2.1.0**: Add `--once` mode, weekly retention, feature flags for static builds, remove OpenSSL dependency, fix retention logic
 - **v2.0.0**: Major refactor with builder patterns, email notifications, improved error handling, and comprehensive documentation
 - **v1.x**: Initial releases with basic backup functionality
