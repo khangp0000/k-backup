@@ -37,6 +37,13 @@ sanitize-filename = "0.6.0"
 dyn-iter = "1.0.1"
 function_name = "0.3.0"
 lettre = { version = "0.11.19", default-features = false, features = ["builder", "hostname", "pool", "smtp-transport", "rustls-tls", "serde"] }
+openssl-sys = { version = "0.9", optional = true }
+
+[features]
+vendored-openssl = ["dep:openssl-sys", "openssl-sys/vendored"]
+bundled-sqlite = ["rusqlite/bundled"]
+static-lzma = ["liblzma/static"]
+fully-static = ["bundled-sqlite", "static-lzma"]
 
 [dev-dependencies]
 maik = "0.2.0"
