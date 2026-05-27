@@ -1,0 +1,5 @@
+# Test recipients for integration tests - DO NOT use in production
+# Identity 1
+age18wrp5uwhgjrdeus8xz7705yftdz7atu4vdxk2fs9l8nunvaeg4aqez9p6w
+# Identity 2
+age1l8h86zx4xgt23gf5l3j3njxfexmddsffspedy28tnls46ruqfggqs5r8ml

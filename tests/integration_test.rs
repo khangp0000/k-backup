@@ -963,3 +963,122 @@ fn test_smtp_backup_cycle_with_notification() {
     assert!(result.is_ok());
     assert_eq!(backup_set.len(), 1);
 }
+
+// ─── Recipients File Encryption Tests ──────────────────────────────────────
+
+fn decrypt_and_decompress_with_identity(
+    path: &std::path::Path,
+    identity: &dyn age::Identity,
+) -> Vec<(String, Vec<u8>)> {
+    let file = fs::File::open(path).unwrap();
+    let decryptor = age::Decryptor::new(BufReader::new(file)).unwrap();
+    let decrypted = decryptor
+        .decrypt(std::iter::once(identity))
+        .unwrap();
+    let decompressed = liblzma::read::XzDecoder::new(BufReader::new(decrypted));
+    let mut archive = tar::Archive::new(decompressed);
+
+    let mut entries = Vec::new();
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let path = entry.path().unwrap().to_string_lossy().to_string();
+        let mut content = Vec::new();
+        entry.read_to_end(&mut content).unwrap();
+        entries.push((path, content));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+fn test_recipients_file() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_recipients.txt")
+}
+
+fn test_identity_1() -> age::x25519::Identity {
+    "AGE-SECRET-KEY-1Y60VNPEJGMHTG8Z75D5Q8MKX4Z207EQJLZDHETLLKYX67TLUS2RQ329ZXS"
+        .parse()
+        .unwrap()
+}
+
+fn test_identity_2() -> age::x25519::Identity {
+    "AGE-SECRET-KEY-1VR82K9YTDHYVNUVXLJR9EUZY9WFS8CNT80L8H29VRNTRQ4UKWE7SS46MMR"
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn test_full_backup_pipeline_recipients_file_multi_recipient() {
+    let tmp = TempDir::new().unwrap();
+    let out_dir = tmp.path().join("backups");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let config = BackupConfig::builder()
+        .cron("0 1 * * *")
+        .archive_base_name("recipients_test")
+        .out_dir(out_dir.clone())
+        .files(vec![ArchiveEntryConfig::Base64(
+            Base64Source::builder()
+                .content("secret data for multiple recipients")
+                .dst(PathBuf::from("secret.txt"))
+                .build(),
+        )])
+        .compressor(CompressorConfig::Xz(XzConfig::builder().level(1).build()))
+        .encryptor(EncryptorConfig::Age(AgeEncryptorConfig::RecipientsFiles {
+            recipients_files: vec![test_recipients_file().to_string_lossy().into_owned()],
+        }))
+        .build();
+
+    let dt = Utc.with_ymd_and_hms(2025, 6, 15, 10, 0, 0).unwrap();
+    let (path, err) = config.create_archive(dt, pool()).unwrap();
+
+    assert!(err.is_none());
+    assert!(path.exists());
+    assert!(path.file_name().unwrap().to_str().unwrap().ends_with(".tar.xz.age"));
+
+    // Decrypt with identity 1
+    let entries = decrypt_and_decompress_with_identity(&path, &test_identity_1());
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].0, "secret.txt");
+    assert_eq!(entries[0].1, b"secret data for multiple recipients");
+
+    // Decrypt with identity 2
+    let entries = decrypt_and_decompress_with_identity(&path, &test_identity_2());
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].0, "secret.txt");
+    assert_eq!(entries[0].1, b"secret data for multiple recipients");
+}
+
+#[test]
+fn test_recipients_file_decrypt_fails_with_wrong_identity() {
+    let tmp = TempDir::new().unwrap();
+    let out_dir = tmp.path().join("backups");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let config = BackupConfig::builder()
+        .cron("0 1 * * *")
+        .archive_base_name("recipients_test_fail")
+        .out_dir(out_dir.clone())
+        .files(vec![ArchiveEntryConfig::Base64(
+            Base64Source::builder()
+                .content("should not be readable")
+                .dst(PathBuf::from("secret.txt"))
+                .build(),
+        )])
+        .compressor(CompressorConfig::Xz(XzConfig::builder().level(1).build()))
+        .encryptor(EncryptorConfig::Age(AgeEncryptorConfig::RecipientsFiles {
+            recipients_files: vec![test_recipients_file().to_string_lossy().into_owned()],
+        }))
+        .build();
+
+    let dt = Utc.with_ymd_and_hms(2025, 6, 15, 10, 0, 0).unwrap();
+    let (path, err) = config.create_archive(dt, pool()).unwrap();
+    assert!(err.is_none());
+
+    // Generate a completely unrelated identity
+    let wrong_identity = age::x25519::Identity::generate();
+
+    let file = fs::File::open(&path).unwrap();
+    let decryptor = age::Decryptor::new(BufReader::new(file)).unwrap();
+    let result = decryptor.decrypt(std::iter::once(&wrong_identity as &dyn age::Identity));
+    assert!(result.is_err());
+}

@@ -136,6 +136,8 @@ compressor:
 ```
 
 ### Encryption
+
+#### Passphrase-based
 ```yaml
 encryptor:
   encryptor_type: age
@@ -143,7 +145,32 @@ encryptor:
   passphrase: 'your-secure-password'
 ```
 
-**Security Note**: Passphrases are stored in plain text in config files. Consider using proper file permissions (600) and secure storage. Yes, this isn't ideal, but it's simple.
+#### Recipients file-based
+```yaml
+encryptor:
+  encryptor_type: age
+  secret_type: recipients_files
+  recipients_files:
+    - /path/to/recipients.txt
+```
+
+The recipients file contains one recipient per line (comments with `#` and empty lines are ignored). Supported recipient types:
+- **age x25519**: `age1...` (native age public keys, generated with `age-keygen`)
+- **SSH public keys**: `ssh-ed25519 AAAA...` or `ssh-rsa AAAA...`
+- **Plugin recipients**: `age1pluginname1...` (requires `age-plugin-<name>` in `$PATH`, e.g., [age-plugin-yubikey](https://github.com/str4d/age-plugin-yubikey) for hardware tokens)
+
+Multiple recipients can be listed — any corresponding private key can decrypt the backup. This is useful for shared access (e.g., team members each have their own key).
+
+To generate a new age key pair:
+```bash
+age-keygen -o key.txt
+# Public key: age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+```
+Add the public key line to your recipients file. To decrypt, use `age -d -i key.txt`.
+
+For more information, see the [age documentation](https://age-encryption.org) and the [rage](https://github.com/str4d/rage) Rust implementation.
+
+**Security Note**: Passphrases are stored in plain text in config files. Consider using proper file permissions (600) and secure storage. Recipients file-based encryption avoids storing secrets in the config entirely — only public keys are referenced.
 
 ### Email Notifications
 ```yaml
@@ -265,7 +292,6 @@ retention:
 ## Known Limitations
 
 - **UTC scheduling only** - Cron expressions run in UTC time (because timezones are hard)
-- **Passphrase-only encryption** - Key file support not yet implemented
 - **SMTP notifications only** - Other notification methods not yet supported
 - **No progress indicators** - Runs silently in background (check logs for details)
 - **Single instance** - No protection against multiple concurrent runs
@@ -318,6 +344,7 @@ This project is licensed under the GNU General Public License v3.0 - see the LIC
 
 ## Version History
 
+- **v2.2.0**: Add recipients file-based encryption (x25519, SSH keys, age plugins), multi-recipient support
 - **v2.1.0**: Add `--once` mode, weekly retention, feature flags for static builds, remove OpenSSL dependency, fix retention logic
 - **v2.0.0**: Major refactor with builder patterns, email notifications, improved error handling, and comprehensive documentation
 - **v1.x**: Initial releases with basic backup functionality

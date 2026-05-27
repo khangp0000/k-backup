@@ -65,7 +65,7 @@ impl<W: Write> EncryptorBuilder<W> for EncryptorConfig {
                 Ok(writer.into())
             }
             EncryptorConfig::Age(age) => {
-                tracing::info!("Initializing Age encryption with passphrase");
+                tracing::info!("Initializing Age encryption");
                 age.build_encryptor(writer)
             }
         }
