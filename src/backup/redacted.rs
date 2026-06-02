@@ -4,8 +4,8 @@
 //! accidental exposure in logs, debug output, or serialized configuration.
 
 use bon::Builder;
-use getset::Getters;
 use derive_more::From;
+use getset::Getters;
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Debug, Formatter};
@@ -19,7 +19,7 @@ pub static REDACTED_PASSPHRASE: &str = "###REDACTED_PASSPHRASE###";
 ///
 /// Used to store sensitive data like passphrases while preventing
 /// accidental exposure in logs, debug output, or serialized config.
-/// 
+///
 /// Provides secure access through getter methods and automatically
 /// zeros memory on drop for additional security.
 #[derive(Clone, Zeroize, From, Builder, PartialEq, Eq, Getters)]
@@ -28,8 +28,6 @@ pub struct RedactedString {
     #[builder(into)]
     inner: String,
 }
-
-
 
 impl Debug for RedactedString {
     /// Always shows redacted placeholder instead of actual value
@@ -79,8 +77,6 @@ impl Visitor<'_> for RedactedStringVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-
 
     #[test]
     fn test_redacted_string_zeroize() {

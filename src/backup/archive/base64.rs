@@ -18,7 +18,7 @@ use std::path::PathBuf;
 /// This source type allows creating archive entries from base64-encoded content,
 /// which is particularly useful for testing, configuration data, and small
 /// in-memory content that needs to be included in backups.
-/// 
+///
 /// Content is automatically decoded from base64 during serialization/deserialization.
 #[derive(Clone, Debug, Serialize, Deserialize, Validate, Builder, PartialEq, Eq, Getters)]
 #[serde(deny_unknown_fields)]

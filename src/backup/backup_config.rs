@@ -6,8 +6,7 @@ use crate::backup::tar;
 use bon::Builder;
 use getset::Getters;
 
-use crate::backup::result_error::error::Error;
-use crate::backup::result_error::result::convert_error_vec;
+use crate::backup::result_error::error::{EntryErrors, Error};
 use crate::backup::result_error::result::Result;
 use crate::backup::result_error::{AddFunctionName, AddMsg};
 use crate::backup::retention::{ItemWithDateTime, RetentionConfig};
@@ -92,8 +91,6 @@ pub struct BackupConfig {
     retention: Option<RetentionConfig>,
 }
 
-
-
 static TIME_FORMAT: &str = "%Y-%m-%dT%Hh%Mm%Ss%z";
 
 impl FileExtProvider for BackupConfig {
@@ -163,50 +160,67 @@ impl BackupConfig {
 
     /// Spawns background thread to collect archive entries
     ///
-    /// Returns (thread_handle, entry_receiver)
+    /// Returns (error_handle, entry_receiver):
+    /// - error_handle: collects non-fatal entry errors grouped by config index
+    /// - entry_receiver: streams successfully resolved archive entries
     fn spawn_entry_collector(
         &self,
         pre_process_pool: Arc<ThreadPool>,
-    ) -> (JoinHandle<Result<()>>, Receiver<Result<ArchiveEntry>>) {
+    ) -> (JoinHandle<EntryErrors>, Receiver<Result<ArchiveEntry>>) {
         let (result_tx, result_rx) = sync_channel(pre_process_pool.current_num_threads());
         let entries_configs = self.files().clone();
         let handle = std::thread::spawn(move || {
-            convert_error_vec(pre_process_pool.install(|| {
+            pre_process_pool.install(|| {
                 entries_configs
                     .par_iter()
-                    .map(|archive_entry_config| {
-                        archive_entry_config.archive_entry_iterator().map(|iter| {
-                            let errors = iter
-                                .filter_map(|archive_entry_result| {
-                                    archive_entry_result
-                                        .add_msg("Ignoring entry")
-                                        .and_then(|archive_entry| {
-                                            result_tx.send(Ok(archive_entry)).map_err(Error::from)
-                                        })
-                                        .err()
-                                })
-                                .collect_vec();
-                            convert_error_vec(errors)
-                        })
-                    })
-                    .filter_map(|res| match res {
-                        Ok(r) => r.err(),
-                        Err(e) => result_tx.send(Err(e)).map_err(Error::from).err(),
-                    })
-                    .collect()
-            }))
+                    .enumerate()
+                    .fold(
+                        || EntryErrors::new(entries_configs.clone()),
+                        |mut entry_errors, (index, archive_entry_config)| {
+                            match archive_entry_config.archive_entry_iterator() {
+                                Err(e) => {
+                                    if let Err(e) = result_tx.send(Err(e)) {
+                                        entry_errors.insert(index, Error::from(e));
+                                    }
+                                }
+                                Ok(iter) => {
+                                    for result in iter {
+                                        match result {
+                                            Ok(entry) => {
+                                                if let Err(e) = result_tx.send(Ok(entry)) {
+                                                    entry_errors.insert(index, Error::from(e));
+                                                }
+                                            }
+                                            Err(e) => {
+                                                entry_errors.insert(index, e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            entry_errors
+                        },
+                    )
+                    .reduce(
+                        || EntryErrors::new(entries_configs.clone()),
+                        |mut a, b| {
+                            a.merge(b).unwrap();
+                            a
+                        },
+                    )
+            })
         });
         (handle, result_rx)
     }
 
     /// Creates backup archive with compression and encryption
     ///
-    /// Returns (archive_path, non_fatal_error)
+    /// Returns (archive_path, entry_errors)
     pub fn create_archive(
         &self,
         dt: DateTime<Utc>,
         pre_process_pool: Arc<ThreadPool>,
-    ) -> Result<(PathBuf, Option<Error>)> {
+    ) -> Result<(PathBuf, EntryErrors)> {
         tracing::info!(
             "Creating archive with {} worker threads",
             pre_process_pool.current_num_threads()
@@ -241,13 +255,16 @@ impl BackupConfig {
         }
         .add_fn_name("BackupConfig::create_write_archive");
 
-        let entry_create_res = entry_handle.join().unwrap();
+        let entry_errors = entry_handle.join().unwrap();
         match archive_create_res {
-            Ok(fp) => Ok((fp, entry_create_res.err())),
-            Err(e1) => match entry_create_res {
-                Ok(_) => Err(e1),
-                Err(e2) => Err(e1.chain(e2)),
-            },
+            Ok(fp) => Ok((fp, entry_errors)),
+            Err(e) => {
+                if entry_errors.is_empty() {
+                    Err(e)
+                } else {
+                    Err(e.chain(Error::archive_entry_errors(entry_errors)))
+                }
+            }
         }
     }
 
@@ -264,7 +281,7 @@ impl BackupConfig {
             "Starting backup creation for {} file sources",
             self.files().len()
         );
-        let (file_path, non_fatal_error) = self.create_archive(now, pre_process_pool)?;
+        let (file_path, entry_errors) = self.create_archive(now, pre_process_pool)?;
 
         let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
         tracing::info!(
@@ -303,10 +320,12 @@ impl BackupConfig {
             });
         }
 
-        if let Some(non_fatal_error) = non_fatal_error {
-            let non_fatal_error =
-                non_fatal_error.add_msg(format!("Non-fatal while creating backup {:?}", file_path));
-            tracing::warn!("{}", non_fatal_error);
+        if !entry_errors.is_empty() {
+            tracing::warn!(
+                "Errors while creating backup {:?}\n\n{}",
+                file_path,
+                entry_errors
+            );
             tracing::info!("Start sending notifications...");
             let topic = format!(
                 "[{}] Error while making backup",
@@ -315,7 +334,7 @@ impl BackupConfig {
             let notification_errors = self
                 .notifications()
                 .iter()
-                .map(|notification| notification.send(&topic, &non_fatal_error))
+                .map(|notification| notification.send(&topic, &entry_errors))
                 .filter_map(|res| res.err())
                 .collect_vec();
             if !notification_errors.is_empty() {
@@ -882,8 +901,8 @@ mod tests {
         let dt = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
 
         // Create encrypted and compressed archive
-        let (archive_path, error) = config.create_archive(dt, pool).unwrap();
-        assert!(error.is_none());
+        let (archive_path, entry_errors) = config.create_archive(dt, pool).unwrap();
+        assert!(entry_errors.is_empty());
         assert!(archive_path.exists());
 
         // Verify file extension

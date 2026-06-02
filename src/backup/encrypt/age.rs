@@ -54,12 +54,15 @@ impl<W: Write> EncryptorBuilder<W> for AgeEncryptorConfig {
                     None,
                     &mut stdin_guard,
                 )
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
+                .map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
+                })?;
 
-                let encryptor = age::Encryptor::with_recipients(
-                    recipients.iter().map(|r| r.as_ref() as _),
-                )
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
+                let encryptor =
+                    age::Encryptor::with_recipients(recipients.iter().map(|r| r.as_ref() as _))
+                        .map_err(|e| {
+                            std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
+                        })?;
 
                 Ok(encryptor.wrap_output(writer)?.into())
             }
@@ -77,7 +80,10 @@ impl Validate for AgeEncryptorConfig {
 
                 if !passphrase.inner().validate_length(Some(8), None, None) {
                     let mut error = ValidationError::new("length");
-                    error.message = Some("Age encryption passphrase must be at least 8 characters long for security".into());
+                    error.message = Some(
+                        "Age encryption passphrase must be at least 8 characters long for security"
+                            .into(),
+                    );
                     errors.add("passphrase", error);
                 }
 

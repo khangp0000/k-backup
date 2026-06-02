@@ -1,13 +1,13 @@
 use crate::backup::arcvec::ArcVec;
-use crate::backup::redacted::RedactedString;
 use crate::backup::function_path;
 use crate::backup::notifications::Notification;
+use crate::backup::redacted::RedactedString;
 use crate::backup::result_error::error::Error;
 use crate::backup::result_error::result::Result;
 use crate::backup::result_error::{AddFunctionName, AddMsg};
 use bon::Builder;
-use getset::Getters;
 use function_name::named;
+use getset::Getters;
 use itertools::Itertools;
 use lettre::message::header::ContentType;
 use lettre::message::Mailbox;
@@ -121,7 +121,7 @@ impl Notification for SmtpNotificationConfig {
 mod tests {
     use super::*;
     use crate::backup::redacted::RedactedString;
-    
+
     #[test]
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     fn test_smtp_notification_send() {

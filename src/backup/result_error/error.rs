@@ -1,9 +1,83 @@
+use crate::backup::archive::ArchiveEntryConfig;
+use crate::backup::arcvec::ArcVec;
 use crate::backup::result_error::{AddFunctionName, AddMsg};
 use std::borrow::Cow;
-use std::fmt::Debug;
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Display};
 use std::sync::mpsc::SendError;
+use std::sync::Arc;
 use thiserror::Error;
 use thiserror_ext;
+
+/// A collection of non-fatal errors grouped by archive entry config index.
+///
+/// Each entry config (identified by its index in the config list) may produce
+/// multiple errors during archive creation. Errors for the same index are
+/// merged via [`Error::chain_inplace`].
+///
+/// Display format shows each failing entry's config followed by its indented errors.
+pub struct EntryErrors {
+    pub configs: ArcVec<ArchiveEntryConfig>,
+    pub errors: BTreeMap<usize, Error>,
+}
+
+impl EntryErrors {
+    pub fn new(configs: ArcVec<ArchiveEntryConfig>) -> Self {
+        Self {
+            configs,
+            errors: BTreeMap::new(),
+        }
+    }
+
+    /// Inserts an error for a given config index, merging with any existing error.
+    pub fn insert(&mut self, index: usize, error: Error) {
+        match self.errors.entry(index) {
+            std::collections::btree_map::Entry::Occupied(mut e) => {
+                e.get_mut().chain_inplace(error);
+            }
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert(error);
+            }
+        }
+    }
+
+    /// Merges another `EntryErrors` into this one.
+    ///
+    /// Returns `Err` if the two instances refer to different config lists (pointer inequality).
+    pub fn merge(&mut self, other: EntryErrors) -> std::result::Result<(), &'static str> {
+        if !Arc::ptr_eq(&self.configs, &other.configs) {
+            return Err("Cannot merge EntryErrors with different configs");
+        }
+        for (index, error) in other.errors {
+            self.insert(index, error);
+        }
+        Ok(())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+impl Display for EntryErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, (index, error)) in self.errors.iter().enumerate() {
+            if i > 0 {
+                write!(f, "\n\n")?;
+            }
+            let config = &self.configs[*index];
+            write!(f, "[entry #{}] {:?}\n", index, config)?;
+            write!(f, "{}", indent::indent_all_with("  ", error.to_string()))?;
+        }
+        Ok(())
+    }
+}
+
+impl Debug for EntryErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(self, f)
+    }
+}
 
 #[derive(Error, Debug, thiserror_ext::Box, thiserror_ext::Construct)]
 #[thiserror_ext(
@@ -43,9 +117,12 @@ pub enum ErrorInternal {
         error: Error,
     },
     #[error("{}", itertools::join(.0, "\n\n"))]
+    #[construct(skip)]
     LotsOfError(Vec<Error>),
     #[error("{0}")]
     SmtpSendError(Cow<'static, str>),
+    #[error("{0}")]
+    ArchiveEntryErrors(EntryErrors),
 }
 
 impl AddFunctionName for Error {
@@ -75,8 +152,16 @@ impl From<Vec<Error>> for Error {
     }
 }
 
+const MAX_ERRORS: usize = 10;
+
 impl Error {
-    pub fn into_error_iter(self) -> Box<dyn Iterator<Item = Error>> {
+    /// Creates a `LotsOfError`, truncating to [`MAX_ERRORS`] entries.
+    pub fn lots_of_error(mut errors: Vec<Error>) -> Self {
+        errors.truncate(MAX_ERRORS);
+        ErrorInternal::LotsOfError(errors).into()
+    }
+
+    pub fn into_error_iter(self) -> Box<dyn ExactSizeIterator<Item = Error>> {
         match self.into_inner() {
             ErrorInternal::LotsOfError(v) => Box::new(v.into_iter()),
             e => Box::new(std::iter::once(e.into())),
@@ -86,12 +171,44 @@ impl Error {
     pub fn chain(self, other: Error) -> Error {
         let error_vec = match self.into_inner() {
             ErrorInternal::LotsOfError(mut v) => {
-                v.extend(other.into_error_iter());
+                let remaining = MAX_ERRORS.saturating_sub(v.len());
+                v.extend(other.into_error_iter().take(remaining));
                 v
             }
-            e => vec![e.into(), other],
+            e => {
+                let other_iter = other.into_error_iter();
+                let take = (MAX_ERRORS - 1).min(other_iter.len());
+                let mut v = Vec::with_capacity(1 + take);
+                v.push(e.into());
+                v.extend(other_iter.take(take));
+                v
+            }
         };
         Error::lots_of_error(error_vec)
+    }
+
+    /// Appends `other` into this error in place, converting to `LotsOfError` if needed.
+    ///
+    /// Unlike [`chain`](Self::chain) which consumes `self`, this mutates in place —
+    /// useful when the error is behind a mutable reference (e.g., in a map entry).
+    /// Truncates to [`MAX_ERRORS`] entries.
+    pub fn chain_inplace(&mut self, other: Error) {
+        if let ErrorInternal::LotsOfError(v) = self.0.inner_mut() {
+            let remaining = MAX_ERRORS.saturating_sub(v.len());
+            v.extend(other.into_error_iter().take(remaining));
+        } else {
+            let other_iter = other.into_error_iter();
+            let error_vec = Vec::with_capacity(1 + other_iter.len());
+            let new_error = Error::lots_of_error(error_vec);
+            let old_error = std::mem::replace(self, new_error);
+            if let ErrorInternal::LotsOfError(v) = self.0.inner_mut() {
+                v.push(old_error);
+                let remaining = MAX_ERRORS.saturating_sub(v.len());
+                v.extend(other_iter.take(remaining));
+            } else {
+                unreachable!()
+            }
+        };
     }
 }
 

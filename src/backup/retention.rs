@@ -1,6 +1,6 @@
 use bon::Builder;
-use getset::Getters;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
+use getset::Getters;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use std::fmt::Debug;
@@ -72,8 +72,6 @@ pub struct RetentionConfig {
     min_backups: usize,
 }
 
-
-
 impl Default for RetentionConfig {
     fn default() -> Self {
         Self::builder()
@@ -99,9 +97,15 @@ impl RetentionConfig {
     {
         let default_retention = Duration::from_std(self.default_retention).unwrap();
         let daily_retention = self.daily_retention.map(|d| Duration::from_std(d).unwrap());
-        let weekly_retention = self.weekly_retention.map(|d| Duration::from_std(d).unwrap());
-        let monthly_retention = self.monthly_retention.map(|d| Duration::from_std(d).unwrap());
-        let yearly_retention = self.yearly_retention.map(|d| Duration::from_std(d).unwrap());
+        let weekly_retention = self
+            .weekly_retention
+            .map(|d| Duration::from_std(d).unwrap());
+        let monthly_retention = self
+            .monthly_retention
+            .map(|d| Duration::from_std(d).unwrap());
+        let yearly_retention = self
+            .yearly_retention
+            .map(|d| Duration::from_std(d).unwrap());
 
         let mut last_keep_daily = None;
         let mut last_keep_weekly = None;
@@ -140,10 +144,31 @@ impl RetentionConfig {
                     return false;
                 }
 
-                let keep = should_keep(&utc_date_time, age, &mut last_keep_yearly, yearly_retention, |dt| dt.year())
-                    || should_keep(&utc_date_time, age, &mut last_keep_monthly, monthly_retention, |dt| (dt.year(), dt.month()))
-                    || should_keep(&utc_date_time, age, &mut last_keep_weekly, weekly_retention, |dt| (dt.iso_week().year(), dt.iso_week().week()))
-                    || should_keep(&utc_date_time, age, &mut last_keep_daily, daily_retention, |dt| (dt.year(), dt.month(), dt.day()));
+                let keep = should_keep(
+                    &utc_date_time,
+                    age,
+                    &mut last_keep_yearly,
+                    yearly_retention,
+                    |dt| dt.year(),
+                ) || should_keep(
+                    &utc_date_time,
+                    age,
+                    &mut last_keep_monthly,
+                    monthly_retention,
+                    |dt| (dt.year(), dt.month()),
+                ) || should_keep(
+                    &utc_date_time,
+                    age,
+                    &mut last_keep_weekly,
+                    weekly_retention,
+                    |dt| (dt.iso_week().year(), dt.iso_week().week()),
+                ) || should_keep(
+                    &utc_date_time,
+                    age,
+                    &mut last_keep_daily,
+                    daily_retention,
+                    |dt| (dt.year(), dt.month(), dt.day()),
+                );
 
                 !keep
             })
@@ -205,8 +230,6 @@ pub struct ItemWithDateTime<R, T: TimeZone = Utc> {
     item: R,
     date_time: DateTime<T>,
 }
-
-
 
 impl<T: TimeZone> From<DateTime<T>> for ItemWithDateTime<(), T> {
     fn from(value: DateTime<T>) -> Self {

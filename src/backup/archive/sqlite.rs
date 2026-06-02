@@ -22,7 +22,7 @@ use std::path::PathBuf;
 /// even while the database is being actively used by other processes.
 /// This is much safer than just copying the database file as it ensures
 /// transactional consistency and handles concurrent access properly.
-/// 
+///
 /// The backup process creates a temporary file that is automatically
 /// cleaned up after being added to the archive.
 #[derive(Clone, Debug, Serialize, Deserialize, Validate, Builder, PartialEq, Eq, Getters)]

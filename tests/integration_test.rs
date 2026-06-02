@@ -36,7 +36,9 @@ use tempfile::TempDir;
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 fn test_passphrase() -> RedactedString {
-    RedactedString::builder().inner("integration-test-passphrase").build()
+    RedactedString::builder()
+        .inner("integration-test-passphrase")
+        .build()
 }
 
 fn pool() -> Arc<rayon::ThreadPool> {
@@ -65,8 +67,9 @@ fn create_sqlite_db(path: &std::path::Path) {
 fn decrypt_and_decompress(path: &std::path::Path, passphrase: &str) -> Vec<(String, Vec<u8>)> {
     let file = fs::File::open(path).unwrap();
     let decryptor = age::Decryptor::new(BufReader::new(file)).unwrap();
-    let identity =
-        age::scrypt::Identity::new(age::secrecy::SecretString::new(passphrase.to_string().into()));
+    let identity = age::scrypt::Identity::new(age::secrecy::SecretString::new(
+        passphrase.to_string().into(),
+    ));
     let decrypted = decryptor
         .decrypt(std::iter::once(&identity as &dyn age::Identity))
         .unwrap();
@@ -103,7 +106,9 @@ fn test_full_backup_pipeline_base64_source() {
                 .dst(PathBuf::from("test.txt"))
                 .build(),
         )])
-        .compressor(CompressorConfig::Xz(XzConfig::builder().level(3).thread(2).build()))
+        .compressor(CompressorConfig::Xz(
+            XzConfig::builder().level(3).thread(2).build(),
+        ))
         .encryptor(EncryptorConfig::Age(AgeEncryptorConfig::Passphrase {
             passphrase: test_passphrase(),
         }))
@@ -112,9 +117,14 @@ fn test_full_backup_pipeline_base64_source() {
     let dt = Utc.with_ymd_and_hms(2025, 6, 15, 10, 0, 0).unwrap();
     let (path, err) = config.create_archive(dt, pool()).unwrap();
 
-    assert!(err.is_none());
+    assert!(err.is_empty());
     assert!(path.exists());
-    assert!(path.file_name().unwrap().to_str().unwrap().ends_with(".tar.xz.age"));
+    assert!(path
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .ends_with(".tar.xz.age"));
 
     let entries = decrypt_and_decompress(&path, "integration-test-passphrase");
     assert_eq!(entries.len(), 1);
@@ -152,12 +162,14 @@ fn test_full_backup_pipeline_glob_source() {
     let dt = Utc.with_ymd_and_hms(2025, 6, 15, 10, 0, 0).unwrap();
     let (path, err) = config.create_archive(dt, pool()).unwrap();
 
-    assert!(err.is_none());
+    assert!(err.is_empty());
     let entries = decrypt_and_decompress(&path, "integration-test-passphrase");
     let paths: Vec<&str> = entries.iter().map(|e| e.0.as_str()).collect();
     assert!(paths.contains(&"files/docs/readme.txt"));
     assert!(paths.contains(&"files/root.txt"));
-    assert!(!paths.iter().any(|p| p.ends_with(".jpg") || p.ends_with(".md")));
+    assert!(!paths
+        .iter()
+        .any(|p| p.ends_with(".jpg") || p.ends_with(".md")));
 }
 
 #[test]
@@ -187,7 +199,7 @@ fn test_full_backup_pipeline_sqlite_source() {
     let dt = Utc.with_ymd_and_hms(2025, 6, 15, 10, 0, 0).unwrap();
     let (path, err) = config.create_archive(dt, pool()).unwrap();
 
-    assert!(err.is_none());
+    assert!(err.is_empty());
     let entries = decrypt_and_decompress(&path, "integration-test-passphrase");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].0, "backup.db");
@@ -239,7 +251,9 @@ fn test_full_backup_pipeline_mixed_sources() {
                     .build(),
             ),
         ])
-        .compressor(CompressorConfig::Xz(XzConfig::builder().level(6).thread(2).build()))
+        .compressor(CompressorConfig::Xz(
+            XzConfig::builder().level(6).thread(2).build(),
+        ))
         .encryptor(EncryptorConfig::Age(AgeEncryptorConfig::Passphrase {
             passphrase: test_passphrase(),
         }))
@@ -248,7 +262,7 @@ fn test_full_backup_pipeline_mixed_sources() {
     let dt = Utc.with_ymd_and_hms(2025, 6, 15, 10, 0, 0).unwrap();
     let (path, err) = config.create_archive(dt, pool()).unwrap();
 
-    assert!(err.is_none());
+    assert!(err.is_empty());
     let entries = decrypt_and_decompress(&path, "integration-test-passphrase");
     let paths: Vec<&str> = entries.iter().map(|e| e.0.as_str()).collect();
 
@@ -283,7 +297,12 @@ fn test_no_compression_no_encryption() {
     let dt = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
     let (path, _) = config.create_archive(dt, pool()).unwrap();
 
-    assert!(path.file_name().unwrap().to_str().unwrap().ends_with(".tar"));
+    assert!(path
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .ends_with(".tar"));
 
     // Verify it's a valid tar directly
     let file = fs::File::open(&path).unwrap();
@@ -324,7 +343,9 @@ fn test_compression_levels_produce_different_sizes() {
                     .dst(PathBuf::from("data.txt"))
                     .build(),
             )])
-            .compressor(CompressorConfig::Xz(XzConfig::builder().level(level).build()))
+            .compressor(CompressorConfig::Xz(
+                XzConfig::builder().level(level).build(),
+            ))
             .encryptor(EncryptorConfig::None)
             .build();
 
@@ -387,7 +408,9 @@ fn test_retention_deletes_expired_backups() {
             .build(),
     ));
 
-    config.execute_backup_cycle(&mut backup_set, now, pool()).unwrap();
+    config
+        .execute_backup_cycle(&mut backup_set, now, pool())
+        .unwrap();
 
     assert!(!old_path.exists(), "Expired backup should be deleted");
     assert!(recent_path.exists(), "Recent backup should be kept");
@@ -434,7 +457,9 @@ fn test_retention_min_backups_safety_net() {
         ));
     }
 
-    config.execute_backup_cycle(&mut backup_set, now, pool()).unwrap();
+    config
+        .execute_backup_cycle(&mut backup_set, now, pool())
+        .unwrap();
 
     // All 3 old + 1 new = 4, under min_backups=5, so none deleted
     assert_eq!(backup_set.len(), 4);
@@ -451,7 +476,10 @@ fn test_retention_daily_keeps_one_per_day() {
         .archive_base_name("daily")
         .out_dir(out_dir.clone())
         .files(vec![ArchiveEntryConfig::Base64(
-            Base64Source::builder().content("x").dst(PathBuf::from("x.txt")).build(),
+            Base64Source::builder()
+                .content("x")
+                .dst(PathBuf::from("x.txt"))
+                .build(),
         )])
         .compressor(CompressorConfig::None)
         .encryptor(EncryptorConfig::None)
@@ -495,12 +523,20 @@ fn test_retention_daily_keeps_one_per_day() {
             .build(),
     ));
 
-    config.execute_backup_cycle(&mut backup_set, now, pool()).unwrap();
+    config
+        .execute_backup_cycle(&mut backup_set, now, pool())
+        .unwrap();
 
     // Daily retention keeps one per day: June 14 (most recent) + June 13 + new backup
-    assert!(same_day_late.exists() || different_day.exists(), "At least one daily backup kept");
+    assert!(
+        same_day_late.exists() || different_day.exists(),
+        "At least one daily backup kept"
+    );
     // The early same-day backup should be deleted (duplicate day)
-    assert!(!same_day_early.exists(), "Earlier same-day backup should be deleted");
+    assert!(
+        !same_day_early.exists(),
+        "Earlier same-day backup should be deleted"
+    );
 }
 
 #[test]
@@ -514,7 +550,10 @@ fn test_retention_weekly_keeps_one_per_week() {
         .archive_base_name("weekly")
         .out_dir(out_dir.clone())
         .files(vec![ArchiveEntryConfig::Base64(
-            Base64Source::builder().content("x").dst(PathBuf::from("x.txt")).build(),
+            Base64Source::builder()
+                .content("x")
+                .dst(PathBuf::from("x.txt"))
+                .build(),
         )])
         .compressor(CompressorConfig::None)
         .encryptor(EncryptorConfig::None)
@@ -560,11 +599,19 @@ fn test_retention_weekly_keeps_one_per_week() {
             .build(),
     ));
 
-    config.execute_backup_cycle(&mut backup_set, now, pool()).unwrap();
+    config
+        .execute_backup_cycle(&mut backup_set, now, pool())
+        .unwrap();
 
     // Weekly keeps one per week: week 23 (latest = Sat) + week 22 kept + new backup
-    assert!(week23_late.exists(), "Later same-week backup should be kept");
-    assert!(!week23_early.exists(), "Earlier same-week backup should be deleted");
+    assert!(
+        week23_late.exists(),
+        "Later same-week backup should be kept"
+    );
+    assert!(
+        !week23_early.exists(),
+        "Earlier same-week backup should be deleted"
+    );
     assert!(week22.exists(), "Different week backup should be kept");
 }
 
@@ -579,7 +626,10 @@ fn test_retention_monthly_keeps_one_per_month() {
         .archive_base_name("monthly")
         .out_dir(out_dir.clone())
         .files(vec![ArchiveEntryConfig::Base64(
-            Base64Source::builder().content("x").dst(PathBuf::from("x.txt")).build(),
+            Base64Source::builder()
+                .content("x")
+                .dst(PathBuf::from("x.txt"))
+                .build(),
         )])
         .compressor(CompressorConfig::None)
         .encryptor(EncryptorConfig::None)
@@ -631,14 +681,25 @@ fn test_retention_monthly_keeps_one_per_month() {
             .build(),
     ));
 
-    config.execute_backup_cycle(&mut backup_set, now, pool()).unwrap();
+    config
+        .execute_backup_cycle(&mut backup_set, now, pool())
+        .unwrap();
 
     // Monthly retention: keeps one per month within 6 months
     // Jan, Feb, Mar (most recent of the two) should be kept + new backup
-    assert!(jan.exists(), "January backup should be kept (one per month)");
-    assert!(feb.exists(), "February backup should be kept (one per month)");
+    assert!(
+        jan.exists(),
+        "January backup should be kept (one per month)"
+    );
+    assert!(
+        feb.exists(),
+        "February backup should be kept (one per month)"
+    );
     assert!(mar.exists(), "March (later) backup should be kept");
-    assert!(!mar2.exists(), "March (earlier) backup should be deleted (duplicate month)");
+    assert!(
+        !mar2.exists(),
+        "March (earlier) backup should be deleted (duplicate month)"
+    );
 }
 
 #[test]
@@ -652,7 +713,10 @@ fn test_retention_yearly_keeps_one_per_year() {
         .archive_base_name("yearly")
         .out_dir(out_dir.clone())
         .files(vec![ArchiveEntryConfig::Base64(
-            Base64Source::builder().content("x").dst(PathBuf::from("x.txt")).build(),
+            Base64Source::builder()
+                .content("x")
+                .dst(PathBuf::from("x.txt"))
+                .build(),
         )])
         .compressor(CompressorConfig::None)
         .encryptor(EncryptorConfig::None)
@@ -704,14 +768,19 @@ fn test_retention_yearly_keeps_one_per_year() {
             .build(),
     ));
 
-    config.execute_backup_cycle(&mut backup_set, now, pool()).unwrap();
+    config
+        .execute_backup_cycle(&mut backup_set, now, pool())
+        .unwrap();
 
     // Yearly retention: one per year within 5 years
     // 2022, 2023 (most recent = Nov), 2024 kept + new backup
     assert!(y2022.exists(), "2022 backup should be kept (one per year)");
     assert!(y2023.exists(), "2023 (later) backup should be kept");
     assert!(y2024.exists(), "2024 backup should be kept");
-    assert!(!y2023b.exists(), "2023 (earlier) backup should be deleted (duplicate year)");
+    assert!(
+        !y2023b.exists(),
+        "2023 (earlier) backup should be deleted (duplicate year)"
+    );
 }
 
 #[test]
@@ -725,15 +794,18 @@ fn test_retention_combined_daily_monthly_yearly() {
         .archive_base_name("combo")
         .out_dir(out_dir.clone())
         .files(vec![ArchiveEntryConfig::Base64(
-            Base64Source::builder().content("x").dst(PathBuf::from("x.txt")).build(),
+            Base64Source::builder()
+                .content("x")
+                .dst(PathBuf::from("x.txt"))
+                .build(),
         )])
         .compressor(CompressorConfig::None)
         .encryptor(EncryptorConfig::None)
         .retention(
             RetentionConfig::builder()
-                .default_retention(Duration::from_secs(3 * 86400))    // 3 days
-                .daily_retention(Duration::from_secs(7 * 86400))      // 7 days
-                .monthly_retention(Duration::from_secs(90 * 86400))   // 90 days
+                .default_retention(Duration::from_secs(3 * 86400)) // 3 days
+                .daily_retention(Duration::from_secs(7 * 86400)) // 7 days
+                .monthly_retention(Duration::from_secs(90 * 86400)) // 90 days
                 .yearly_retention(Duration::from_secs(3 * 365 * 86400)) // 3 years
                 .min_backups(1)
                 .build(),
@@ -789,13 +861,24 @@ fn test_retention_combined_daily_monthly_yearly() {
             .build(),
     ));
 
-    config.execute_backup_cycle(&mut backup_set, now, pool()).unwrap();
+    config
+        .execute_backup_cycle(&mut backup_set, now, pool())
+        .unwrap();
 
     assert!(recent.exists(), "Recent backup kept by default retention");
     assert!(daily_kept.exists(), "5-day backup kept by daily retention");
-    assert!(monthly_kept.exists(), "60-day backup kept by monthly retention");
-    assert!(yearly_kept.exists(), "400-day backup kept by yearly retention");
-    assert!(!expired.exists(), "4-year backup should be deleted (outside all retentions)");
+    assert!(
+        monthly_kept.exists(),
+        "60-day backup kept by monthly retention"
+    );
+    assert!(
+        yearly_kept.exists(),
+        "400-day backup kept by yearly retention"
+    );
+    assert!(
+        !expired.exists(),
+        "4-year backup should be deleted (outside all retentions)"
+    );
 }
 
 #[test]
@@ -828,7 +911,9 @@ fn test_multiple_backup_cycles() {
 
     for day in 0..5u32 {
         let now = Utc.with_ymd_and_hms(2025, 6, 10 + day, 1, 0, 0).unwrap();
-        config.execute_backup_cycle(&mut backup_set, now, pool()).unwrap();
+        config
+            .execute_backup_cycle(&mut backup_set, now, pool())
+            .unwrap();
     }
 
     assert!(backup_set.len() >= 2);
@@ -890,7 +975,10 @@ fn smtp_env_config() -> Option<SmtpNotificationConfig> {
     let to = std::env::var("SMTP_TO").ok()?;
     let username = std::env::var("SMTP_USERNAME").ok()?;
     let password = std::env::var("SMTP_PASSWORD").ok()?;
-    let mode = match std::env::var("SMTP_MODE").unwrap_or_else(|_| "Ssl".into()).as_str() {
+    let mode = match std::env::var("SMTP_MODE")
+        .unwrap_or_else(|_| "Ssl".into())
+        .as_str()
+    {
         "StartTls" => SmtpMode::StartTls,
         "Unsecured" => SmtpMode::Unsecured,
         _ => SmtpMode::Ssl,
@@ -901,7 +989,10 @@ fn smtp_env_config() -> Option<SmtpNotificationConfig> {
             .host(host)
             .smtp_mode(mode)
             .from(from.parse::<Mailbox>().ok()?)
-            .to(to.split(',').filter_map(|s| s.trim().parse::<Mailbox>().ok()).collect::<Vec<_>>())
+            .to(to
+                .split(',')
+                .filter_map(|s| s.trim().parse::<Mailbox>().ok())
+                .collect::<Vec<_>>())
             .username(username)
             .password(RedactedString::builder().inner(password).build())
             .build(),
@@ -964,6 +1055,69 @@ fn test_smtp_backup_cycle_with_notification() {
     assert_eq!(backup_set.len(), 1);
 }
 
+// ─── SMTP Multiple Entry Errors Test ───────────────────────────────────────
+
+#[test]
+fn test_smtp_notification_with_multiple_entry_errors() {
+    let Some(smtp_config) = smtp_env_config() else {
+        eprintln!("Skipping: SMTP env vars not set");
+        return;
+    };
+
+    let tmp = TempDir::new().unwrap();
+    let out_dir = tmp.path().join("backups");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let config = BackupConfig::builder()
+        .cron("0 1 * * *")
+        .archive_base_name("multi_error_test")
+        .out_dir(out_dir)
+        .files(vec![
+            ArchiveEntryConfig::Base64(
+                Base64Source::builder()
+                    .content("good content")
+                    .dst(PathBuf::from("good.txt"))
+                    .build(),
+            ),
+            ArchiveEntryConfig::Glob(
+                WalkdirAndGlobsetSource::builder()
+                    .src_dir(PathBuf::from("/nonexistent/entry/one"))
+                    .globset(vec![serde_json::from_str("\"**/*\"").unwrap()])
+                    .build(),
+            ),
+            ArchiveEntryConfig::Glob(
+                WalkdirAndGlobsetSource::builder()
+                    .src_dir(PathBuf::from("/nonexistent/entry/two"))
+                    .globset(vec![serde_json::from_str("\"**/*.log\"").unwrap()])
+                    .build(),
+            ),
+            ArchiveEntryConfig::Sqlite(
+                SqliteDBSource::builder()
+                    .src(PathBuf::from("/nonexistent/database.sqlite3"))
+                    .dst(PathBuf::from("db.sqlite3"))
+                    .build(),
+            ),
+        ])
+        .notifications(vec![NotificationConfig::Smtp(smtp_config)])
+        .compressor(CompressorConfig::None)
+        .encryptor(EncryptorConfig::None)
+        .build();
+
+    let now = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+    let mut backup_set = HashSet::new();
+
+    // Should fail because archive_entry_iterator() fails for sqlite/glob entries
+    // which sends fatal error through channel
+    let result = config.execute_backup_cycle(&mut backup_set, now, pool());
+    // The result may be Ok (if only non-fatal) or Err (if fatal entry_iterator failure)
+    // Either way, the notification should have been sent with grouped entry errors
+    eprintln!(
+        "Result: {:?}",
+        result.as_ref().map(|_| "ok").unwrap_or("err")
+    );
+    eprintln!("Backup set: {}", backup_set.len());
+}
+
 // ─── Recipients File Encryption Tests ──────────────────────────────────────
 
 fn decrypt_and_decompress_with_identity(
@@ -972,9 +1126,7 @@ fn decrypt_and_decompress_with_identity(
 ) -> Vec<(String, Vec<u8>)> {
     let file = fs::File::open(path).unwrap();
     let decryptor = age::Decryptor::new(BufReader::new(file)).unwrap();
-    let decrypted = decryptor
-        .decrypt(std::iter::once(identity))
-        .unwrap();
+    let decrypted = decryptor.decrypt(std::iter::once(identity)).unwrap();
     let decompressed = liblzma::read::XzDecoder::new(BufReader::new(decrypted));
     let mut archive = tar::Archive::new(decompressed);
 
@@ -1031,9 +1183,14 @@ fn test_full_backup_pipeline_recipients_file_multi_recipient() {
     let dt = Utc.with_ymd_and_hms(2025, 6, 15, 10, 0, 0).unwrap();
     let (path, err) = config.create_archive(dt, pool()).unwrap();
 
-    assert!(err.is_none());
+    assert!(err.is_empty());
     assert!(path.exists());
-    assert!(path.file_name().unwrap().to_str().unwrap().ends_with(".tar.xz.age"));
+    assert!(path
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .ends_with(".tar.xz.age"));
 
     // Decrypt with identity 1
     let entries = decrypt_and_decompress_with_identity(&path, &test_identity_1());
@@ -1072,7 +1229,7 @@ fn test_recipients_file_decrypt_fails_with_wrong_identity() {
 
     let dt = Utc.with_ymd_and_hms(2025, 6, 15, 10, 0, 0).unwrap();
     let (path, err) = config.create_archive(dt, pool()).unwrap();
-    assert!(err.is_none());
+    assert!(err.is_empty());
 
     // Generate a completely unrelated identity
     let wrong_identity = age::x25519::Identity::generate();

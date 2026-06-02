@@ -21,7 +21,7 @@ static DEFAULT_MAX_PARALLELIZATION: usize = 32;
 ///
 /// XZ provides excellent compression ratios at the cost of CPU time.
 /// Supports both single-threaded and multi-threaded compression modes.
-/// 
+///
 /// Multi-threaded compression uses more memory but significantly improves
 /// performance on multi-core systems. Thread count is automatically
 /// optimized based on available CPU cores if not specified.
