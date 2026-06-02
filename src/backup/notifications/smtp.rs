@@ -1,6 +1,6 @@
 use crate::backup::arcvec::ArcVec;
 use crate::backup::function_path;
-use crate::backup::notifications::Notification;
+use crate::backup::notifications::event::BackupEvent;
 use crate::backup::redacted::RedactedString;
 use crate::backup::result_error::error::Error;
 use crate::backup::result_error::result::Result;
@@ -15,7 +15,6 @@ use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use std::fmt::Display;
 use std::ops::Deref;
 use validator::Validate;
 
@@ -56,9 +55,50 @@ pub enum SmtpMode {
     StartTls,
 }
 
-impl Notification for SmtpNotificationConfig {
+impl SmtpNotificationConfig {
     #[named]
-    fn send<D1: Display, D2: Display>(&self, topic: D1, msg: D2) -> Result<()> {
+    pub fn send_event(&self, event: &BackupEvent) -> Result<()> {
+        let (subject, body) = Self::format_event(event);
+        self.send_email(&subject, &body)
+    }
+
+    fn format_event(event: &BackupEvent) -> (String, String) {
+        match event {
+            BackupEvent::BackupCycleStart { timestamp, .. } => (
+                format!("[{}] Backup cycle started", timestamp),
+                "Backup cycle has started.".to_string(),
+            ),
+            BackupEvent::Success {
+                timestamp,
+                output_file,
+                ..
+            } => (
+                format!("[{}] Backup successful", timestamp),
+                format!("Backup completed successfully.\nOutput: {:?}", output_file),
+            ),
+            BackupEvent::NonFatalError {
+                timestamp,
+                output_file,
+                errors,
+                ..
+            } => (
+                format!("[{}] Backup completed with errors", timestamp),
+                format!(
+                    "Backup completed with non-fatal errors.\nOutput: {:?}\n\n{}",
+                    output_file, errors
+                ),
+            ),
+            BackupEvent::FatalError {
+                timestamp, error, ..
+            } => (
+                format!("[{}] Backup failed", timestamp),
+                format!("Backup failed with fatal error.\n\n{}", error),
+            ),
+        }
+    }
+
+    #[named]
+    pub fn send_email(&self, topic: &str, body: &str) -> Result<()> {
         tracing::info!(
             "Started smtp email notification from {:?} to {:?}",
             self.from,
@@ -73,7 +113,7 @@ impl Notification for SmtpNotificationConfig {
             .from(self.from.clone())
             .subject(format!("{}", topic))
             .header(ContentType::TEXT_PLAIN)
-            .body(format!("{}", msg))
+            .body(format!("{}", body))
             .map_err(Error::from)
             .add_msg(format!(
                 "Fail to build notification email from {:?} to {:?}",
@@ -147,7 +187,7 @@ mod tests {
         server.start();
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        let result = config.send("Test Subject", "Test message body");
+        let result = config.send_email("Test Subject", "Test message body");
 
         std::thread::sleep(std::time::Duration::from_millis(200));
 

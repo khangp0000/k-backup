@@ -16,13 +16,22 @@ files:
     content: "SGVsbG8gSSBsb3ZlIHU="
     dst: test.iluvu.txt
 notifications:
-  - type: "smtp"
+  - name: email-ops
+    type: smtp
+    events: [non_fatal_error, fatal_error]
+    on_failure: continue
     host: "smtp.example.com"
     smtp_mode: "Ssl"
     from: "admin@example.com"
     to: [ "you@example.com", "me@example.com" ]
     username: "username"
     password: "password"
+  - name: backup-hook
+    type: command
+    events: [success, non_fatal_error, fatal_error]
+    on_failure: skip
+    command: ["/usr/local/bin/backup-notify", "--event-stdin"]
+    timeout: 60s
 encryptor:
   encryptor_type: age
   secret_type: passphrase

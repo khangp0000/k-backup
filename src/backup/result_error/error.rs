@@ -123,6 +123,8 @@ pub enum ErrorInternal {
     SmtpSendError(Cow<'static, str>),
     #[error("{0}")]
     ArchiveEntryErrors(EntryErrors),
+    #[error("Backup cycle skipped: {0}")]
+    CycleSkipped(Error),
 }
 
 impl AddFunctionName for Error {
@@ -159,6 +161,10 @@ impl Error {
     pub fn lots_of_error(mut errors: Vec<Error>) -> Self {
         errors.truncate(MAX_ERRORS);
         ErrorInternal::LotsOfError(errors).into()
+    }
+
+    pub fn is_cycle_skipped(&self) -> bool {
+        matches!(self.inner(), ErrorInternal::CycleSkipped(_))
     }
 
     pub fn into_error_iter(self) -> Box<dyn ExactSizeIterator<Item = Error>> {

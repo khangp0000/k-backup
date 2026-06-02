@@ -10,6 +10,7 @@ use validator::Validate;
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::exit;
+use std::sync::Arc;
 
 /// k-backup: Automated backup tool with encryption, compression, and retention
 ///
@@ -68,6 +69,7 @@ fn main() {
         })
         // Run backup: once if --once flag or no cron, otherwise daemon loop
         .and_then(|bc| {
+            let bc = Arc::new(bc);
             if args.once || bc.cron().is_none() {
                 bc.run_once(thread_pool.into())
             } else {

@@ -19,7 +19,8 @@ use k_backup::backup::compress::CompressorConfig;
 use k_backup::backup::encrypt::age::AgeEncryptorConfig;
 use k_backup::backup::encrypt::EncryptorConfig;
 use k_backup::backup::notifications::smtp::{SmtpMode, SmtpNotificationConfig};
-use k_backup::backup::notifications::{Notification, NotificationConfig};
+use k_backup::backup::notifications::NotificationConfig;
+use k_backup::backup::notifications::NotificationTarget;
 use k_backup::backup::redacted::RedactedString;
 use k_backup::backup::retention::{ItemWithDateTime, RetentionConfig};
 use lettre::message::Mailbox;
@@ -408,7 +409,7 @@ fn test_retention_deletes_expired_backups() {
             .build(),
     ));
 
-    config
+    Arc::new(config)
         .execute_backup_cycle(&mut backup_set, now, pool())
         .unwrap();
 
@@ -457,7 +458,7 @@ fn test_retention_min_backups_safety_net() {
         ));
     }
 
-    config
+    Arc::new(config)
         .execute_backup_cycle(&mut backup_set, now, pool())
         .unwrap();
 
@@ -523,7 +524,7 @@ fn test_retention_daily_keeps_one_per_day() {
             .build(),
     ));
 
-    config
+    Arc::new(config)
         .execute_backup_cycle(&mut backup_set, now, pool())
         .unwrap();
 
@@ -599,7 +600,7 @@ fn test_retention_weekly_keeps_one_per_week() {
             .build(),
     ));
 
-    config
+    Arc::new(config)
         .execute_backup_cycle(&mut backup_set, now, pool())
         .unwrap();
 
@@ -681,7 +682,7 @@ fn test_retention_monthly_keeps_one_per_month() {
             .build(),
     ));
 
-    config
+    Arc::new(config)
         .execute_backup_cycle(&mut backup_set, now, pool())
         .unwrap();
 
@@ -768,7 +769,7 @@ fn test_retention_yearly_keeps_one_per_year() {
             .build(),
     ));
 
-    config
+    Arc::new(config)
         .execute_backup_cycle(&mut backup_set, now, pool())
         .unwrap();
 
@@ -861,7 +862,7 @@ fn test_retention_combined_daily_monthly_yearly() {
             .build(),
     ));
 
-    config
+    Arc::new(config)
         .execute_backup_cycle(&mut backup_set, now, pool())
         .unwrap();
 
@@ -909,6 +910,7 @@ fn test_multiple_backup_cycles() {
 
     let mut backup_set = HashSet::new();
 
+    let config = Arc::new(config);
     for day in 0..5u32 {
         let now = Utc.with_ymd_and_hms(2025, 6, 10 + day, 1, 0, 0).unwrap();
         config
@@ -1006,7 +1008,7 @@ fn test_smtp_send_notification() {
         return;
     };
 
-    let result = config.send(
+    let result = config.send_email(
         "[k-backup integration test] Test notification",
         "This is a test notification from k-backup integration tests.",
     );
@@ -1042,7 +1044,7 @@ fn test_smtp_backup_cycle_with_notification() {
                     .build(),
             ),
         ])
-        .notifications(vec![NotificationConfig::Smtp(smtp_config)])
+        .notifications(vec![NotificationConfig { name: None, events: k_backup::backup::notifications::event::default_events(), on_failure: k_backup::backup::notifications::OnFailure::Continue, target: NotificationTarget::Smtp(smtp_config) }])
         .compressor(CompressorConfig::None)
         .encryptor(EncryptorConfig::None)
         .build();
@@ -1050,7 +1052,7 @@ fn test_smtp_backup_cycle_with_notification() {
     let now = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
     let mut backup_set = HashSet::new();
 
-    let result = config.execute_backup_cycle(&mut backup_set, now, pool());
+    let result = Arc::new(config).execute_backup_cycle(&mut backup_set, now, pool());
     assert!(result.is_ok());
     assert_eq!(backup_set.len(), 1);
 }
@@ -1098,7 +1100,7 @@ fn test_smtp_notification_with_multiple_entry_errors() {
                     .build(),
             ),
         ])
-        .notifications(vec![NotificationConfig::Smtp(smtp_config)])
+        .notifications(vec![NotificationConfig { name: None, events: k_backup::backup::notifications::event::default_events(), on_failure: k_backup::backup::notifications::OnFailure::Continue, target: NotificationTarget::Smtp(smtp_config) }])
         .compressor(CompressorConfig::None)
         .encryptor(EncryptorConfig::None)
         .build();
@@ -1108,7 +1110,7 @@ fn test_smtp_notification_with_multiple_entry_errors() {
 
     // Should fail because archive_entry_iterator() fails for sqlite/glob entries
     // which sends fatal error through channel
-    let result = config.execute_backup_cycle(&mut backup_set, now, pool());
+    let result = Arc::new(config).execute_backup_cycle(&mut backup_set, now, pool());
     // The result may be Ok (if only non-fatal) or Err (if fatal entry_iterator failure)
     // Either way, the notification should have been sent with grouped entry errors
     eprintln!(
@@ -1116,6 +1118,538 @@ fn test_smtp_notification_with_multiple_entry_errors() {
         result.as_ref().map(|_| "ok").unwrap_or("err")
     );
     eprintln!("Backup set: {}", backup_set.len());
+}
+
+// ─── Command Notification Tests ────────────────────────────────────────────
+
+#[test]
+fn test_command_notification_with_echo() {
+    use k_backup::backup::notifications::command::{CommandNotificationConfig, EnvInheritMode};
+    use k_backup::backup::notifications::event::{BackupEvent, EventType};
+
+    let tmp = TempDir::new().unwrap();
+    let output_file = tmp.path().join("event.json");
+
+    let config = CommandNotificationConfig::builder()
+        .command(vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            format!("cat > {}", output_file.display()),
+        ])
+        .stdin_json(true)
+        .env_inherit_mode(EnvInheritMode::None)
+        .build();
+
+    let event = BackupEvent::Success {
+        config: Arc::new(
+            BackupConfig::builder()
+                .archive_base_name("test")
+                .out_dir(tmp.path().to_path_buf())
+                .files(vec![])
+                .compressor(CompressorConfig::None)
+                .encryptor(EncryptorConfig::None)
+                .build(),
+        ),
+        timestamp: Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap(),
+        output_file: PathBuf::from("/tmp/test.tar.xz.age"),
+    };
+
+    let result = config.send_event(&event);
+    assert!(result.is_ok(), "Command failed: {:?}", result.err());
+
+    // Verify JSON was written
+    let content = fs::read_to_string(&output_file).unwrap();
+    assert!(content.contains("\"type\":\"success\""));
+    assert!(content.contains("test.tar.xz.age"));
+}
+
+#[test]
+fn test_command_notification_timeout() {
+    use k_backup::backup::notifications::command::{CommandNotificationConfig, EnvInheritMode};
+    use k_backup::backup::notifications::event::{BackupEvent, EventType};
+
+    let config = CommandNotificationConfig::builder()
+        .command(vec!["sleep".to_string(), "10".to_string()])
+        .stdin_json(false)
+        .timeout(std::time::Duration::from_millis(100))
+        .env_inherit_mode(EnvInheritMode::None)
+        .build();
+
+    let event = BackupEvent::BackupCycleStart {
+        config: Arc::new(
+            BackupConfig::builder()
+                .archive_base_name("test")
+                .out_dir(PathBuf::from("/tmp"))
+                .files(vec![])
+                .compressor(CompressorConfig::None)
+                .encryptor(EncryptorConfig::None)
+                .build(),
+        ),
+        timestamp: Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap(),
+    };
+
+    let result = config.send_event(&event);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("timed out"));
+}
+
+#[test]
+fn test_command_notification_nonzero_exit() {
+    use k_backup::backup::notifications::command::{CommandNotificationConfig, EnvInheritMode};
+    use k_backup::backup::notifications::event::{BackupEvent, EventType};
+
+    let config = CommandNotificationConfig::builder()
+        .command(vec!["false".to_string()])
+        .stdin_json(false)
+        .env_inherit_mode(EnvInheritMode::None)
+        .build();
+
+    let event = BackupEvent::BackupCycleStart {
+        config: Arc::new(
+            BackupConfig::builder()
+                .archive_base_name("test")
+                .out_dir(PathBuf::from("/tmp"))
+                .files(vec![])
+                .compressor(CompressorConfig::None)
+                .encryptor(EncryptorConfig::None)
+                .build(),
+        ),
+        timestamp: Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap(),
+    };
+
+    let result = config.send_event(&event);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("exited with status"));
+}
+
+#[test]
+fn test_command_notification_env_inherit_all() {
+    use k_backup::backup::notifications::command::{CommandNotificationConfig, EnvInheritMode};
+    use k_backup::backup::notifications::event::BackupEvent;
+
+    let tmp = TempDir::new().unwrap();
+    let output_file = tmp.path().join("env.txt");
+
+    // Set a known env var
+    std::env::set_var("K_BACKUP_TEST_VAR", "hello_world");
+
+    let config = CommandNotificationConfig::builder()
+        .command(vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            format!("env > {}", output_file.display()),
+        ])
+        .stdin_json(false)
+        .env_inherit_mode(EnvInheritMode::All)
+        .build();
+
+    let event = BackupEvent::BackupCycleStart {
+        config: Arc::new(
+            BackupConfig::builder()
+                .archive_base_name("test")
+                .out_dir(PathBuf::from("/tmp"))
+                .files(vec![])
+                .compressor(CompressorConfig::None)
+                .encryptor(EncryptorConfig::None)
+                .build(),
+        ),
+        timestamp: Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap(),
+    };
+
+    config.send_event(&event).unwrap();
+    let content = fs::read_to_string(&output_file).unwrap();
+    assert!(content.contains("K_BACKUP_TEST_VAR=hello_world"));
+    std::env::remove_var("K_BACKUP_TEST_VAR");
+}
+
+#[test]
+fn test_command_notification_env_inherit_deny() {
+    use k_backup::backup::notifications::command::{CommandNotificationConfig, EnvInheritMode};
+    use k_backup::backup::notifications::event::BackupEvent;
+
+    let tmp = TempDir::new().unwrap();
+    let output_file = tmp.path().join("env.txt");
+
+    std::env::set_var("K_BACKUP_DENY_TEST", "secret");
+
+    let config = CommandNotificationConfig::builder()
+        .command(vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            format!("env > {}", output_file.display()),
+        ])
+        .stdin_json(false)
+        .env_inherit_mode(EnvInheritMode::All)
+        .env_inherit_deny(vec!["K_BACKUP_DENY_TEST".to_string()])
+        .build();
+
+    let event = BackupEvent::BackupCycleStart {
+        config: Arc::new(
+            BackupConfig::builder()
+                .archive_base_name("test")
+                .out_dir(PathBuf::from("/tmp"))
+                .files(vec![])
+                .compressor(CompressorConfig::None)
+                .encryptor(EncryptorConfig::None)
+                .build(),
+        ),
+        timestamp: Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap(),
+    };
+
+    config.send_event(&event).unwrap();
+    let content = fs::read_to_string(&output_file).unwrap();
+    assert!(!content.contains("K_BACKUP_DENY_TEST"));
+    std::env::remove_var("K_BACKUP_DENY_TEST");
+}
+
+#[test]
+fn test_command_notification_env_inherit_allow() {
+    use k_backup::backup::notifications::command::{CommandNotificationConfig, EnvInheritMode};
+    use k_backup::backup::notifications::event::BackupEvent;
+
+    let tmp = TempDir::new().unwrap();
+    let output_file = tmp.path().join("env.txt");
+
+    std::env::set_var("K_BACKUP_ALLOW_YES", "yes");
+    std::env::set_var("K_BACKUP_ALLOW_NO", "no");
+
+    let config = CommandNotificationConfig::builder()
+        .command(vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            format!("env > {}", output_file.display()),
+        ])
+        .stdin_json(false)
+        .env_inherit_mode(EnvInheritMode::All)
+        .env_inherit_allow(vec!["K_BACKUP_ALLOW_YES".to_string()])
+        .build();
+
+    let event = BackupEvent::BackupCycleStart {
+        config: Arc::new(
+            BackupConfig::builder()
+                .archive_base_name("test")
+                .out_dir(PathBuf::from("/tmp"))
+                .files(vec![])
+                .compressor(CompressorConfig::None)
+                .encryptor(EncryptorConfig::None)
+                .build(),
+        ),
+        timestamp: Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap(),
+    };
+
+    config.send_event(&event).unwrap();
+    let content = fs::read_to_string(&output_file).unwrap();
+    assert!(content.contains("K_BACKUP_ALLOW_YES=yes"));
+    assert!(!content.contains("K_BACKUP_ALLOW_NO"));
+    std::env::remove_var("K_BACKUP_ALLOW_YES");
+    std::env::remove_var("K_BACKUP_ALLOW_NO");
+}
+
+#[test]
+fn test_command_notification_additional_env() {
+    use k_backup::backup::notifications::command::{CommandNotificationConfig, EnvInheritMode};
+    use k_backup::backup::notifications::event::BackupEvent;
+
+    let tmp = TempDir::new().unwrap();
+    let output_file = tmp.path().join("env.txt");
+
+    let config = CommandNotificationConfig::builder()
+        .command(vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            format!("env > {}", output_file.display()),
+        ])
+        .stdin_json(false)
+        .env_inherit_mode(EnvInheritMode::None)
+        .env(std::collections::HashMap::from([
+            ("MY_CUSTOM_VAR".to_string(), "custom_value".to_string()),
+        ]))
+        .build();
+
+    let event = BackupEvent::BackupCycleStart {
+        config: Arc::new(
+            BackupConfig::builder()
+                .archive_base_name("test")
+                .out_dir(PathBuf::from("/tmp"))
+                .files(vec![])
+                .compressor(CompressorConfig::None)
+                .encryptor(EncryptorConfig::None)
+                .build(),
+        ),
+        timestamp: Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap(),
+    };
+
+    config.send_event(&event).unwrap();
+    let content = fs::read_to_string(&output_file).unwrap();
+    assert!(content.contains("MY_CUSTOM_VAR=custom_value"));
+}
+
+#[test]
+fn test_dispatch_on_failure_skip() {
+    use k_backup::backup::notifications::event::EventType;
+    use k_backup::backup::notifications::{NotificationConfig, NotificationTarget, OnFailure};
+
+    let tmp = TempDir::new().unwrap();
+    let out_dir = tmp.path().join("backups");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let config = Arc::new(
+        BackupConfig::builder()
+            .cron("0 1 * * *")
+            .archive_base_name("skip_test")
+            .out_dir(out_dir)
+            .files(vec![ArchiveEntryConfig::Base64(
+                Base64Source::builder()
+                    .content("data")
+                    .dst(PathBuf::from("f.txt"))
+                    .build(),
+            )])
+            .notifications(vec![NotificationConfig {
+                name: Some("failing-hook".to_string()),
+                events: vec![EventType::Success],
+                on_failure: OnFailure::Skip,
+                target: NotificationTarget::Command(
+                    k_backup::backup::notifications::command::CommandNotificationConfig::builder()
+                        .command(vec!["false".to_string()])
+                        .stdin_json(false)
+                        .build(),
+                ),
+            }])
+            .compressor(CompressorConfig::None)
+            .encryptor(EncryptorConfig::None)
+            .build(),
+    );
+
+    let mut backup_set = HashSet::new();
+    let now = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+
+    let result = config.execute_backup_cycle(&mut backup_set, now, pool());
+    // Should be CycleSkipped error
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.is_cycle_skipped(), "Expected CycleSkipped, got: {}", err);
+}
+
+#[test]
+fn test_dispatch_on_failure_error() {
+    use k_backup::backup::notifications::event::EventType;
+    use k_backup::backup::notifications::{NotificationConfig, NotificationTarget, OnFailure};
+
+    let tmp = TempDir::new().unwrap();
+    let out_dir = tmp.path().join("backups");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let config = Arc::new(
+        BackupConfig::builder()
+            .cron("0 1 * * *")
+            .archive_base_name("error_test")
+            .out_dir(out_dir)
+            .files(vec![ArchiveEntryConfig::Base64(
+                Base64Source::builder()
+                    .content("data")
+                    .dst(PathBuf::from("f.txt"))
+                    .build(),
+            )])
+            .notifications(vec![NotificationConfig {
+                name: Some("fatal-hook".to_string()),
+                events: vec![EventType::Success],
+                on_failure: OnFailure::Error,
+                target: NotificationTarget::Command(
+                    k_backup::backup::notifications::command::CommandNotificationConfig::builder()
+                        .command(vec!["false".to_string()])
+                        .stdin_json(false)
+                        .build(),
+                ),
+            }])
+            .compressor(CompressorConfig::None)
+            .encryptor(EncryptorConfig::None)
+            .build(),
+    );
+
+    let mut backup_set = HashSet::new();
+    let now = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+
+    let result = config.execute_backup_cycle(&mut backup_set, now, pool());
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    // Should NOT be CycleSkipped — it's a real error
+    assert!(!err.is_cycle_skipped(), "Should be fatal error, not skip");
+    assert!(err.to_string().contains("fatal-hook"));
+}
+
+#[test]
+fn test_dispatch_error_priority_over_skip() {
+    use k_backup::backup::notifications::event::EventType;
+    use k_backup::backup::notifications::{NotificationConfig, NotificationTarget, OnFailure};
+
+    let tmp = TempDir::new().unwrap();
+    let out_dir = tmp.path().join("backups");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let config = Arc::new(
+        BackupConfig::builder()
+            .cron("0 1 * * *")
+            .archive_base_name("priority_test")
+            .out_dir(out_dir)
+            .files(vec![ArchiveEntryConfig::Base64(
+                Base64Source::builder()
+                    .content("data")
+                    .dst(PathBuf::from("f.txt"))
+                    .build(),
+            )])
+            .notifications(vec![
+                NotificationConfig {
+                    name: Some("skip-hook".to_string()),
+                    events: vec![EventType::Success],
+                    on_failure: OnFailure::Skip,
+                    target: NotificationTarget::Command(
+                        k_backup::backup::notifications::command::CommandNotificationConfig::builder()
+                            .command(vec!["false".to_string()])
+                            .stdin_json(false)
+                            .build(),
+                    ),
+                },
+                NotificationConfig {
+                    name: Some("error-hook".to_string()),
+                    events: vec![EventType::Success],
+                    on_failure: OnFailure::Error,
+                    target: NotificationTarget::Command(
+                        k_backup::backup::notifications::command::CommandNotificationConfig::builder()
+                            .command(vec!["false".to_string()])
+                            .stdin_json(false)
+                            .build(),
+                    ),
+                },
+            ])
+            .compressor(CompressorConfig::None)
+            .encryptor(EncryptorConfig::None)
+            .build(),
+    );
+
+    let mut backup_set = HashSet::new();
+    let now = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+
+    let result = config.execute_backup_cycle(&mut backup_set, now, pool());
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    // Error should win over Skip
+    assert!(!err.is_cycle_skipped(), "Error should take priority over Skip");
+    assert!(err.to_string().contains("error-hook"));
+}
+
+#[test]
+fn test_dispatch_continue_does_not_fail() {
+    use k_backup::backup::notifications::event::EventType;
+    use k_backup::backup::notifications::{NotificationConfig, NotificationTarget, OnFailure};
+
+    let tmp = TempDir::new().unwrap();
+    let out_dir = tmp.path().join("backups");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let config = Arc::new(
+        BackupConfig::builder()
+            .cron("0 1 * * *")
+            .archive_base_name("continue_test")
+            .out_dir(out_dir)
+            .files(vec![ArchiveEntryConfig::Base64(
+                Base64Source::builder()
+                    .content("data")
+                    .dst(PathBuf::from("f.txt"))
+                    .build(),
+            )])
+            .notifications(vec![NotificationConfig {
+                name: Some("log-hook".to_string()),
+                events: vec![EventType::Success],
+                on_failure: OnFailure::Continue,
+                target: NotificationTarget::Command(
+                    k_backup::backup::notifications::command::CommandNotificationConfig::builder()
+                        .command(vec!["false".to_string()])
+                        .stdin_json(false)
+                        .build(),
+                ),
+            }])
+            .compressor(CompressorConfig::None)
+            .encryptor(EncryptorConfig::None)
+            .build(),
+    );
+
+    let mut backup_set = HashSet::new();
+    let now = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+
+    // Should succeed despite failing notification (continue mode)
+    let result = config.execute_backup_cycle(&mut backup_set, now, pool());
+    assert!(result.is_ok());
+    assert_eq!(backup_set.len(), 1);
+}
+
+#[test]
+fn test_dispatch_all_notifications_fire() {
+    use k_backup::backup::notifications::event::EventType;
+    use k_backup::backup::notifications::{NotificationConfig, NotificationTarget, OnFailure};
+
+    let tmp = TempDir::new().unwrap();
+    let out_dir = tmp.path().join("backups");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let marker1 = tmp.path().join("hook1_ran");
+    let marker2 = tmp.path().join("hook2_ran");
+
+    let config = Arc::new(
+        BackupConfig::builder()
+            .cron("0 1 * * *")
+            .archive_base_name("allfire_test")
+            .out_dir(out_dir)
+            .files(vec![ArchiveEntryConfig::Base64(
+                Base64Source::builder()
+                    .content("data")
+                    .dst(PathBuf::from("f.txt"))
+                    .build(),
+            )])
+            .notifications(vec![
+                NotificationConfig {
+                    name: Some("hook1".to_string()),
+                    events: vec![EventType::Success],
+                    on_failure: OnFailure::Continue,
+                    target: NotificationTarget::Command(
+                        k_backup::backup::notifications::command::CommandNotificationConfig::builder()
+                            .command(vec![
+                                "bash".to_string(),
+                                "-c".to_string(),
+                                format!("touch {} && false", marker1.display()),
+                            ])
+                            .stdin_json(false)
+                            .build(),
+                    ),
+                },
+                NotificationConfig {
+                    name: Some("hook2".to_string()),
+                    events: vec![EventType::Success],
+                    on_failure: OnFailure::Continue,
+                    target: NotificationTarget::Command(
+                        k_backup::backup::notifications::command::CommandNotificationConfig::builder()
+                            .command(vec![
+                                "bash".to_string(),
+                                "-c".to_string(),
+                                format!("touch {}", marker2.display()),
+                            ])
+                            .stdin_json(false)
+                            .build(),
+                    ),
+                },
+            ])
+            .compressor(CompressorConfig::None)
+            .encryptor(EncryptorConfig::None)
+            .build(),
+    );
+
+    let mut backup_set = HashSet::new();
+    let now = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+
+    config.execute_backup_cycle(&mut backup_set, now, pool()).unwrap();
+
+    // Both hooks should have run, even though hook1 exited non-zero
+    assert!(marker1.exists(), "hook1 should have run");
+    assert!(marker2.exists(), "hook2 should have run even after hook1 failed");
 }
 
 // ─── Recipients File Encryption Tests ──────────────────────────────────────

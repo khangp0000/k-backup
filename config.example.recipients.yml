@@ -16,7 +16,9 @@ files:
     content: "SGVsbG8gSSBsb3ZlIHU="
     dst: test.iluvu.txt
 notifications:
-  - type: "smtp"
+  - type: smtp
+    events: [non_fatal_error, fatal_error]
+    on_failure: continue
     host: "smtp.example.com"
     smtp_mode: "Ssl"
     from: "admin@example.com"

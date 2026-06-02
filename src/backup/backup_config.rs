@@ -10,7 +10,7 @@ use crate::backup::result_error::error::{EntryErrors, Error};
 use crate::backup::result_error::result::Result;
 use crate::backup::result_error::{AddFunctionName, AddMsg};
 use crate::backup::retention::{ItemWithDateTime, RetentionConfig};
-use chrono::{DateTime, Local, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
 use rayon::prelude::*;
 use rayon::ThreadPool;
@@ -28,7 +28,8 @@ use tempfile::NamedTempFile;
 use validator::Validate;
 
 use crate::backup::arcvec::ArcVec;
-use crate::backup::notifications::{Notification, NotificationConfig};
+use crate::backup::notifications::event::BackupEvent;
+use crate::backup::notifications::{NotificationConfig, OnFailure};
 use crate::backup::validate::validate_cron_str;
 use crate::backup::validate::validate_valid_archive_base_name;
 use crate::backup::validate::validate_writable_dir;
@@ -268,94 +269,108 @@ impl BackupConfig {
         }
     }
 
-    /// Executes one backup cycle: retention cleanup and backup creation
+    /// Executes one backup cycle: retention cleanup and backup creation.
     ///
-    /// Returns next scheduled backup time
+    /// Returns `Err(CycleSkipped)` if a notification with `on_failure: skip` failed.
     pub fn execute_backup_cycle(
-        &self,
+        self: &Arc<Self>,
         backup_set: &mut HashSet<Rc<ItemWithDateTime<PathBuf, Utc>>>,
         now: DateTime<Utc>,
         pre_process_pool: Arc<ThreadPool>,
-    ) -> Result<DateTime<Utc>> {
+    ) -> Result<()> {
         tracing::info!(
             "Starting backup creation for {} file sources",
             self.files().len()
         );
-        let (file_path, entry_errors) = self.create_archive(now, pre_process_pool)?;
 
-        let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
-        tracing::info!(
-            "Successfully created backup: {:?} ({} bytes)",
-            &file_path,
-            file_size
-        );
+        self.dispatch_event(&BackupEvent::BackupCycleStart {
+            config: self.clone(),
+            timestamp: now,
+        })?;
 
-        backup_set.insert(Rc::new(
-            ItemWithDateTime::builder()
-                .item(file_path.clone())
-                .date_time(now)
-                .build(),
-        ));
+        let result = self.create_archive(now, pre_process_pool);
 
-        if let Some(retention) = self.retention() {
-            let backups_to_delete = retention
-                .get_delete(backup_set.iter(), now)
-                .into_iter()
-                .filter(|item| *item.as_ref().date_time() != now)
-                .cloned()
-                .collect_vec();
-            if !backups_to_delete.is_empty() {
+        match result {
+            Ok((file_path, entry_errors)) => {
+                let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
                 tracing::info!(
-                    "Retention cleanup: removing {} expired backups",
-                    backups_to_delete.len()
+                    "Successfully created backup: {:?} ({} bytes)",
+                    &file_path,
+                    file_size
                 );
-            }
-            backups_to_delete.into_iter().for_each(|to_delete| {
-                tracing::info!("Removing expired backup: {:?}", to_delete.item());
-                let removed = backup_set.remove(&to_delete);
-                if !removed {
-                    panic!("Remove item in memory {:?} failed", to_delete.item());
-                }
-                let _ = std::fs::remove_file(to_delete.item());
-            });
-        }
 
-        if !entry_errors.is_empty() {
-            tracing::warn!(
-                "Errors while creating backup {:?}\n\n{}",
-                file_path,
-                entry_errors
-            );
-            tracing::info!("Start sending notifications...");
-            let topic = format!(
-                "[{}] Error while making backup",
-                now.with_timezone(&Local).format(TIME_FORMAT)
-            );
-            let notification_errors = self
-                .notifications()
-                .iter()
-                .map(|notification| notification.send(&topic, &entry_errors))
-                .filter_map(|res| res.err())
-                .collect_vec();
-            if !notification_errors.is_empty() {
-                tracing::error!(
-                    "{}",
-                    Error::lots_of_error(notification_errors)
-                        .add_msg("Error while sending notifications:")
-                );
+                backup_set.insert(Rc::new(
+                    ItemWithDateTime::builder()
+                        .item(file_path.clone())
+                        .date_time(now)
+                        .build(),
+                ));
+
+                if let Some(retention) = self.retention() {
+                    let backups_to_delete = retention
+                        .get_delete(backup_set.iter(), now)
+                        .into_iter()
+                        .filter(|item| *item.as_ref().date_time() != now)
+                        .cloned()
+                        .collect_vec();
+                    if !backups_to_delete.is_empty() {
+                        tracing::info!(
+                            "Retention cleanup: removing {} expired backups",
+                            backups_to_delete.len()
+                        );
+                    }
+                    backups_to_delete.into_iter().for_each(|to_delete| {
+                        tracing::info!("Removing expired backup: {:?}", to_delete.item());
+                        let removed = backup_set.remove(&to_delete);
+                        if !removed {
+                            panic!("Remove item in memory {:?} failed", to_delete.item());
+                        }
+                        let _ = std::fs::remove_file(to_delete.item());
+                    });
+                }
+
+                if !entry_errors.is_empty() {
+                    tracing::warn!(
+                        "Errors while creating backup {:?}\n\n{}",
+                        file_path,
+                        entry_errors
+                    );
+                    if let Err(dispatch_err) = self.dispatch_event(&BackupEvent::NonFatalError {
+                        config: self.clone(),
+                        timestamp: now,
+                        output_file: file_path,
+                        errors: entry_errors.to_string(),
+                    }) {
+                        return Err(Error::archive_entry_errors(entry_errors).chain(dispatch_err));
+                    }
+                } else {
+                    self.dispatch_event(&BackupEvent::Success {
+                        config: self.clone(),
+                        timestamp: now,
+                        output_file: file_path,
+                    })?;
+                }
+            }
+            Err(e) => {
+                tracing::error!("Fatal error creating archive: {}", e);
+                if let Err(dispatch_err) = self.dispatch_event(&BackupEvent::FatalError {
+                    config: self.clone(),
+                    timestamp: now,
+                    error: e.to_string(),
+                }) {
+                    return Err(e.chain(dispatch_err));
+                }
+                return Err(e);
             }
         }
 
         tracing::info!("Total backups now: {}", backup_set.len());
 
-        let next_backup = cron_parser::parse(self.cron().as_ref().unwrap(), &now).unwrap();
-        tracing::info!("Next backup scheduled for: {}", next_backup);
-
-        Ok(next_backup)
+        Ok(())
     }
 
     /// Executes a single backup: retention cleanup, archive creation, then exit.
-    pub fn run_once(&self, pre_process_pool: Arc<ThreadPool>) -> Result<()> {
+    pub fn run_once(self: &Arc<Self>, pre_process_pool: Arc<ThreadPool>) -> Result<()> {
         tracing::info!("Running single backup cycle");
         tracing::info!("Backup output directory: {:?}", self.out_dir());
         tracing::info!("Archive base name: {}", self.archive_base_name());
@@ -380,7 +395,7 @@ impl BackupConfig {
     }
 
     /// Main daemon loop that runs backups on schedule
-    pub fn start_loop(&self, pre_process_pool: Arc<ThreadPool>) -> Result<()> {
+    pub fn start_loop(self: &Arc<Self>, pre_process_pool: Arc<ThreadPool>) -> Result<()> {
         let cron = self.cron().as_ref().ok_or_else(|| {
             Error::from(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -422,11 +437,70 @@ impl BackupConfig {
                 tracing::info!("Sleeping until {start}");
                 std::thread::sleep((start - now).to_std().unwrap())
             } else {
-                start = self.execute_backup_cycle(&mut set, now, pre_process_pool.clone())?;
+                let result = self.execute_backup_cycle(&mut set, now, pre_process_pool.clone());
+                match result {
+                    Ok(()) => {}
+                    Err(e) if e.is_cycle_skipped() => {}
+                    Err(e) => return Err(e),
+                }
+                start = cron_parser::parse(cron, &now).unwrap();
+                tracing::info!("Next backup scheduled for: {}", start);
             }
         }
     }
+
+    /// Dispatches an event to all subscribed notifications.
+    ///
+    /// Sends to all matching notifications. Returns the highest-priority failure:
+    /// Error > Skip > Continue (logged only).
+    fn dispatch_event(self: &Arc<Self>, event: &BackupEvent) -> Result<()> {
+        let event_type = event.event_type();
+        let mut worst: Option<(OnFailure, Error)> = None;
+
+        for (i, notif) in self.notifications().iter().enumerate() {
+            if notif.events.contains(&event_type) {
+                if let Err(e) = notif.send_event(event) {
+                    let name = notif.display_name(i);
+                    let e = e.add_msg(format!("Notification '{}' failed", name));
+                    match notif.on_failure {
+                        OnFailure::Continue => {
+                            tracing::error!("{} (continuing)", e);
+                        }
+                        OnFailure::Skip => {
+                            tracing::error!("{} (skipping cycle)", e);
+                            worst = Some(match worst {
+                                Some((OnFailure::Error, existing)) => {
+                                    (OnFailure::Error, existing)
+                                }
+                                Some((OnFailure::Skip, existing)) => {
+                                    (OnFailure::Skip, existing.chain(e))
+                                }
+                                _ => (OnFailure::Skip, e),
+                            });
+                        }
+                        OnFailure::Error => {
+                            tracing::error!("{} (fatal)", e);
+                            worst = Some(match worst {
+                                Some((OnFailure::Error, existing)) => {
+                                    (OnFailure::Error, existing.chain(e))
+                                }
+                                _ => (OnFailure::Error, e),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        match worst {
+            None => Ok(()),
+            Some((OnFailure::Skip, e)) => Err(Error::cycle_skipped(e)),
+            Some((OnFailure::Error, e)) => Err(e),
+            Some((OnFailure::Continue, _)) => unreachable!(),
+        }
+    }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -617,7 +691,7 @@ mod tests {
         assert!(old_backup_path.exists());
         assert!(recent_backup_path.exists());
 
-        let next_backup = config
+        Arc::new(config)
             .execute_backup_cycle(&mut backup_set, now, pool)
             .unwrap();
 
@@ -633,8 +707,6 @@ mod tests {
             .expect("New backup should be in set");
         assert!(new_backup.item().exists(), "New backup file should exist");
 
-        // Verify next backup time is in the future
-        assert!(next_backup > now);
     }
 
     #[test]
@@ -718,7 +790,7 @@ mod tests {
         assert!(old_but_daily_kept_path.exists());
         assert!(recent_path.exists());
 
-        let next_backup = config
+        Arc::new(config)
             .execute_backup_cycle(&mut backup_set, now, pool)
             .unwrap();
 
@@ -744,8 +816,6 @@ mod tests {
             .expect("New backup should be in set");
         assert!(new_backup.item().exists(), "New backup file should exist");
 
-        // Verify next backup time is in the future
-        assert!(next_backup > now);
     }
 
     #[test]
@@ -814,7 +884,7 @@ mod tests {
         assert!(old_backup1_path.exists());
         assert!(old_backup2_path.exists());
 
-        let next_backup = config
+        Arc::new(config)
             .execute_backup_cycle(&mut backup_set, now, pool)
             .unwrap();
 
@@ -837,7 +907,6 @@ mod tests {
             .expect("New backup should be in set");
         assert!(new_backup.item().exists(), "New backup file should exist");
 
-        assert!(next_backup > now);
     }
 
     #[test]

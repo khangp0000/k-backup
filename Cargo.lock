@@ -1578,7 +1578,7 @@ dependencies = [
 
 [[package]]
 name = "k_backup"
-version = "2.3.0"
+version = "3.0.0"
 dependencies = [
  "age",
  "bon",
@@ -1613,6 +1613,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "validator",
+ "wait-timeout",
  "walkdir",
  "zeroize",
 ]

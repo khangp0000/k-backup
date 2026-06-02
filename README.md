@@ -21,6 +21,7 @@ For enterprise environments, consider established solutions like Veeam, Bacula, 
 - **Encryption**: Age encryption with passphrase support
 - **Retention Management**: Sophisticated grandfather-father-son rotation with safety nets
 - **Email Notifications**: SMTP notifications for backup failures and errors
+- **Command Notifications**: Run arbitrary commands on backup events with JSON payload
 - **Parallel Processing**: Multi-threaded operations for optimal performance
 - **Robust Error Handling**: Non-fatal errors don't stop backups, comprehensive logging
 
@@ -172,10 +173,21 @@ For more information, see the [age documentation](https://age-encryption.org) an
 
 **Security Note**: Passphrases are stored in plain text in config files. Consider using proper file permissions (600) and secure storage. Recipients file-based encryption avoids storing secrets in the config entirely — only public keys are referenced.
 
-### Email Notifications
+### Notifications
+
+Notifications are event-driven. Each notification target subscribes to specific event types and defines failure behavior.
+
+**Event types**: `backup_cycle_start`, `success`, `non_fatal_error`, `fatal_error`
+
+**`on_failure`**: `continue` (default, log and proceed), `skip` (abort current cycle), `error` (stop daemon)
+
+#### SMTP
 ```yaml
 notifications:
-  - type: smtp
+  - name: email-ops
+    type: smtp
+    events: [non_fatal_error, fatal_error]
+    on_failure: continue
     host: smtp.gmail.com
     smtp_mode: Ssl          # or StartTls
     from: backup@example.com
@@ -184,7 +196,21 @@ notifications:
     password: app-password
 ```
 
-Sends email notifications when backup errors occur (non-fatal errors that don't stop the backup process).
+#### Command
+```yaml
+  - name: backup-hook
+    type: command
+    events: [success, non_fatal_error, fatal_error]
+    on_failure: skip
+    command: ["/usr/local/bin/backup-notify", "--event-stdin"]
+    stdin_json: true        # pipe event JSON to stdin (default: true)
+    env_inherit_mode: none  # or "all" to inherit parent env
+    env:                    # additional env vars (always applied)
+      BACKUP_APP: "k-backup"
+    timeout: 60s            # kill command after timeout (default: 30s)
+```
+
+When `env_inherit_mode: all`, use `env_inherit_allow` and `env_inherit_deny` to filter inherited variables.
 
 ### Retention Policies
 ```yaml
@@ -292,7 +318,6 @@ retention:
 ## Known Limitations
 
 - **UTC scheduling only** - Cron expressions run in UTC time (because timezones are hard)
-- **SMTP notifications only** - Other notification methods not yet supported
 - **No progress indicators** - Runs silently in background (check logs for details)
 - **Single instance** - No protection against multiple concurrent runs
 - **File permissions** - Backup process runs with current user permissions
@@ -344,6 +369,7 @@ This project is licensed under the GNU General Public License v3.0 - see the LIC
 
 ## Version History
 
+- **v3.0.0**: Event-based notification system with command support, `on_failure` behavior (continue/skip/error), improved error reporting with `EntryErrors` grouping, error truncation (max 10)
 - **v2.2.0**: Add recipients file-based encryption (x25519, SSH keys, age plugins), multi-recipient support
 - **v2.1.0**: Add `--once` mode, weekly retention, feature flags for static builds, remove OpenSSL dependency, fix retention logic
 - **v2.0.0**: Major refactor with builder patterns, email notifications, improved error handling, and comprehensive documentation
