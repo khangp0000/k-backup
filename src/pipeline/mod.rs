@@ -24,17 +24,26 @@ pub trait FinishableWrite: Write + Send {
 pub struct PassthroughWriter<W: Write + Send>(pub W);
 
 impl<W: Write + Send> Write for PassthroughWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> { self.0.write(buf) }
-    fn flush(&mut self) -> std::io::Result<()> { self.0.flush() }
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
 }
 
 impl<W: Write + Send> FinishableWrite for PassthroughWriter<W> {
-    fn finish(mut self: Box<Self>) -> std::io::Result<()> { self.0.flush() }
+    fn finish(mut self: Box<Self>) -> std::io::Result<()> {
+        self.0.flush()
+    }
 }
 
 /// Runs the full pipeline: collect entries, write tar → compress → encrypt → temp file.
 /// Returns (temp_file, entry_errors).
-pub fn run(config: &BackupConfig, pool: &rayon::ThreadPool) -> Result<(NamedTempFile, EntryErrors)> {
+pub fn run(
+    config: &BackupConfig,
+    pool: &rayon::ThreadPool,
+) -> Result<(NamedTempFile, EntryErrors)> {
     let temp_file = match &config.temp_dir {
         Some(dir) => NamedTempFile::new_in(dir),
         None => NamedTempFile::new(),
@@ -48,16 +57,18 @@ pub fn run(config: &BackupConfig, pool: &rayon::ThreadPool) -> Result<(NamedTemp
     let base_writer: Box<dyn FinishableWrite> = Box::new(PassthroughWriter(file));
     let encrypt_writer =
         encrypt::wrap_writer(&config.encryptor, base_writer).context("Failed to init encryptor")?;
-    let compress_writer =
-        compress::wrap_writer(&config.compressor, encrypt_writer).context("Failed to init compressor")?;
+    let compress_writer = compress::wrap_writer(&config.compressor, encrypt_writer)
+        .context("Failed to init compressor")?;
 
     // Tar writes into compress → encrypt → file
     let final_writer = tar::write_tar(rx, compress_writer)
-        .map_err(|e| Error::from(e))
+        .map_err(Error::from)
         .context("Tar creation failed")?;
 
     // Finalize: flush compression state + encryption auth tags
-    final_writer.finish().context("Failed to finalize archive")?;
+    final_writer
+        .finish()
+        .context("Failed to finalize archive")?;
 
     Ok((temp_file, entry_errors))
 }

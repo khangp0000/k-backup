@@ -3,7 +3,6 @@
 use crate::error::ArchiveError;
 use crate::pipeline::entry::{ArchiveEntry, ArchiveEntryKind};
 use crate::pipeline::FinishableWrite;
-use std::io::Write;
 use std::sync::mpsc::Receiver;
 use tar::{Builder, Header};
 
@@ -67,7 +66,9 @@ mod tests {
                     header.set_mode(0o644);
                     header.set_entry_type(tar::EntryType::Regular);
                     header.set_cksum();
-                    builder.append_data(&mut header, &entry.dst, data.as_slice()).unwrap();
+                    builder
+                        .append_data(&mut header, &entry.dst, data.as_slice())
+                        .unwrap();
                 }
                 ArchiveEntryKind::File(mut file) => {
                     let size = file.metadata().unwrap().len();
@@ -76,14 +77,18 @@ mod tests {
                     header.set_mode(0o644);
                     header.set_entry_type(tar::EntryType::Regular);
                     header.set_cksum();
-                    builder.append_data(&mut header, &entry.dst, &mut file).unwrap();
+                    builder
+                        .append_data(&mut header, &entry.dst, &mut file)
+                        .unwrap();
                 }
                 ArchiveEntryKind::Symlink(target) => {
                     let mut header = Header::new_gnu();
                     header.set_size(0);
                     header.set_entry_type(tar::EntryType::Symlink);
                     header.set_cksum();
-                    builder.append_link(&mut header, &entry.dst, &target).unwrap();
+                    builder
+                        .append_link(&mut header, &entry.dst, &target)
+                        .unwrap();
                 }
             }
         }
@@ -116,7 +121,9 @@ mod tests {
         header.set_mode(0o644);
         header.set_entry_type(tar::EntryType::Regular);
         header.set_cksum();
-        builder.append_data(&mut header, "from_file.txt", &data[..]).unwrap();
+        builder
+            .append_data(&mut header, "from_file.txt", &data[..])
+            .unwrap();
         let tar_data = builder.into_inner().unwrap();
 
         let mut archive = tar::Archive::new(tar_data.as_slice());
@@ -139,7 +146,10 @@ mod tests {
         for entry in archive.entries().unwrap() {
             let e = entry.unwrap();
             assert_eq!(e.header().entry_type(), tar::EntryType::Symlink);
-            assert_eq!(e.link_name().unwrap().unwrap().to_str().unwrap(), "/target/path");
+            assert_eq!(
+                e.link_name().unwrap().unwrap().to_str().unwrap(),
+                "/target/path"
+            );
         }
     }
 

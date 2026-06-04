@@ -12,16 +12,23 @@ pub fn send_event(config: &CommandConfig, event: &BackupEvent) -> Result<()> {
 
     let mut cmd = Command::new(&config.command[0]);
     cmd.args(&config.command[1..]);
-    cmd.stdin(if config.stdin_json { Stdio::piped() } else { Stdio::null() });
+    cmd.stdin(if config.stdin_json {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
     match config.env_inherit_mode {
-        EnvInheritMode::None => { cmd.env_clear(); }
+        EnvInheritMode::None => {
+            cmd.env_clear();
+        }
         EnvInheritMode::All => {
             cmd.env_clear();
             cmd.envs(std::env::vars().filter(|(k, _)| {
-                let allowed = config.env_inherit_allow.is_empty() || config.env_inherit_allow.contains(k);
+                let allowed =
+                    config.env_inherit_allow.is_empty() || config.env_inherit_allow.contains(k);
                 allowed && !config.env_inherit_deny.contains(k)
             }));
         }
@@ -51,8 +58,10 @@ pub fn send_event(config: &CommandConfig, event: &BackupEvent) -> Result<()> {
         source: e,
     })?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(config.max_output_size)]);
-    let stderr = String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(config.max_output_size)]);
+    let stdout =
+        String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(config.max_output_size)]);
+    let stderr =
+        String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(config.max_output_size)]);
     let stdout = stdout.trim_end().to_string();
     let stderr = stderr.trim_end().to_string();
 
@@ -67,7 +76,8 @@ pub fn send_event(config: &CommandConfig, event: &BackupEvent) -> Result<()> {
         return Err(CommandError::Timeout {
             command: cmd_str,
             timeout: config.timeout,
-        }.into());
+        }
+        .into());
     }
 
     if !output.status.success() {
@@ -76,7 +86,8 @@ pub fn send_event(config: &CommandConfig, event: &BackupEvent) -> Result<()> {
             status: output.status.to_string(),
             stdout,
             stderr,
-        }.into());
+        }
+        .into());
     }
 
     Ok(())

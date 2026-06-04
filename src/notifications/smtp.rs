@@ -1,7 +1,7 @@
 //! SMTP notification target.
 
 use crate::config::SmtpConfig;
-use crate::error::{SmtpError, Result};
+use crate::error::{Result, SmtpError};
 use crate::notifications::event::BackupEvent;
 use lettre::message::header::ContentType;
 use lettre::message::Mailbox;
@@ -19,15 +19,29 @@ fn format_event(event: &BackupEvent) -> (String, String) {
             format!("[{}] Backup cycle started", timestamp),
             "Backup cycle has started.".into(),
         ),
-        BackupEvent::Success { timestamp, output_file, .. } => (
+        BackupEvent::Success {
+            timestamp,
+            output_file,
+            ..
+        } => (
             format!("[{}] Backup successful", timestamp),
             format!("Backup completed successfully.\nOutput: {:?}", output_file),
         ),
-        BackupEvent::NonFatalError { timestamp, output_file, errors, .. } => (
+        BackupEvent::NonFatalError {
+            timestamp,
+            output_file,
+            errors,
+            ..
+        } => (
             format!("[{}] Backup completed with errors", timestamp),
-            format!("Backup completed with non-fatal errors.\nOutput: {:?}\n\n{}", output_file, errors),
+            format!(
+                "Backup completed with non-fatal errors.\nOutput: {:?}\n\n{}",
+                output_file, errors
+            ),
         ),
-        BackupEvent::FatalError { timestamp, error, .. } => (
+        BackupEvent::FatalError {
+            timestamp, error, ..
+        } => (
             format!("[{}] Backup failed", timestamp),
             format!("Backup failed with fatal error.\n\n{}", error),
         ),
@@ -55,10 +69,7 @@ fn send_email(config: &SmtpConfig, subject: &str, body: &str) -> Result<()> {
         .body(body.to_string())
         .map_err(SmtpError::from)?;
 
-    let creds = Credentials::new(
-        config.username.clone(),
-        config.password.inner().to_string(),
-    );
+    let creds = Credentials::new(config.username.clone(), config.password.inner().to_string());
 
     use crate::config::SmtpMode;
     let transport = match config.smtp_mode {
@@ -77,7 +88,9 @@ fn send_email(config: &SmtpConfig, subject: &str, body: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BackupConfig, CompressorConfig, EncryptorConfig, RedactedString, SmtpConfig, SmtpMode};
+    use crate::config::{
+        BackupConfig, CompressorConfig, EncryptorConfig, RedactedString, SmtpConfig, SmtpMode,
+    };
     use crate::notifications::event::BackupEvent;
     use chrono::{TimeZone, Utc};
     use std::path::PathBuf;
@@ -144,8 +157,7 @@ mod tests {
             return;
         }
 
-        let assertion = maik::MailAssertion::new()
-            .recipients_are(["recipient@example.com"]);
+        let assertion = maik::MailAssertion::new().recipients_are(["recipient@example.com"]);
         assert!(server.assert(assertion));
     }
 

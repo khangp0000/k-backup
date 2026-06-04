@@ -39,11 +39,13 @@ fn create_sqlite_db(path: &Path) {
         "CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT);
          INSERT INTO test VALUES (1, 'alice');
          INSERT INTO test VALUES (2, 'bob');",
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 fn list_backup_files(dir: &Path) -> Vec<PathBuf> {
-    fs::read_dir(dir).unwrap()
+    fs::read_dir(dir)
+        .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.is_file())
@@ -53,9 +55,13 @@ fn list_backup_files(dir: &Path) -> Vec<PathBuf> {
 fn decrypt_age(path: &Path, passphrase: &str) -> Vec<u8> {
     let file = fs::File::open(path).unwrap();
     let decryptor = age::Decryptor::new(std::io::BufReader::new(file)).unwrap();
-    let mut identity = age::scrypt::Identity::new(age::secrecy::SecretString::new(passphrase.to_string().into()));
+    let mut identity = age::scrypt::Identity::new(age::secrecy::SecretString::new(
+        passphrase.to_string().into(),
+    ));
     identity.set_max_work_factor(22);
-    let mut reader = decryptor.decrypt(std::iter::once(&identity as &dyn age::Identity)).unwrap();
+    let mut reader = decryptor
+        .decrypt(std::iter::once(&identity as &dyn age::Identity))
+        .unwrap();
     let mut buf = Vec::new();
     reader.read_to_end(&mut buf).unwrap();
     buf
@@ -70,7 +76,9 @@ fn decompress_xz(data: &[u8]) -> Vec<u8> {
 
 fn tar_entries(data: &[u8]) -> Vec<(String, Vec<u8>)> {
     let mut archive = tar::Archive::new(data);
-    archive.entries().unwrap()
+    archive
+        .entries()
+        .unwrap()
         .map(|e| {
             let mut entry = e.unwrap();
             let path = entry.path().unwrap().to_string_lossy().to_string();
@@ -86,8 +94,12 @@ fn tar_entries(data: &[u8]) -> Vec<(String, Vec<u8>)> {
 #[test]
 fn test_base64_source() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: test
 out_dir: {}
 files:
@@ -98,7 +110,10 @@ compressor:
   compressor_type: none
 encryptor:
   encryptor_type: none
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
 
@@ -112,9 +127,13 @@ encryptor:
 #[test]
 fn test_glob_source() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
     let src = create_source_dir(tmp.path());
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: g
 out_dir: {}
 files:
@@ -125,7 +144,11 @@ compressor:
   compressor_type: none
 encryptor:
   encryptor_type: none
-"#, out.display(), src.display()));
+"#,
+            out.display(),
+            src.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
 
@@ -141,10 +164,14 @@ encryptor:
 #[test]
 fn test_sqlite_source() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
     let db = tmp.path().join("test.db");
     create_sqlite_db(&db);
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: s
 out_dir: {}
 files:
@@ -155,7 +182,11 @@ compressor:
   compressor_type: none
 encryptor:
   encryptor_type: none
-"#, out.display(), db.display()));
+"#,
+            out.display(),
+            db.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
 
@@ -168,11 +199,15 @@ encryptor:
 #[test]
 fn test_mixed_sources() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
     let src = create_source_dir(tmp.path());
     let db = tmp.path().join("test.db");
     create_sqlite_db(&db);
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: m
 out_dir: {}
 files:
@@ -189,7 +224,12 @@ compressor:
   compressor_type: none
 encryptor:
   encryptor_type: none
-"#, out.display(), src.display(), db.display()));
+"#,
+            out.display(),
+            src.display(),
+            db.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
 
@@ -206,8 +246,12 @@ encryptor:
 #[test]
 fn test_xz_compression() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: x
 out_dir: {}
 files:
@@ -219,7 +263,10 @@ compressor:
   level: 3
 encryptor:
   encryptor_type: none
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
 
@@ -232,8 +279,12 @@ encryptor:
 #[test]
 fn test_age_passphrase_encryption() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: e
 out_dir: {}
 files:
@@ -246,7 +297,10 @@ encryptor:
   encryptor_type: age
   secret_type: passphrase
   passphrase: "test-pass-phrase"
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
 
@@ -259,8 +313,12 @@ encryptor:
 #[test]
 fn test_full_pipeline() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: full
 out_dir: {}
 files:
@@ -274,7 +332,10 @@ encryptor:
   encryptor_type: age
   secret_type: passphrase
   passphrase: "full-pipeline"
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
 
@@ -287,11 +348,15 @@ encryptor:
 #[test]
 fn test_recipients_file() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
     let identity = age::x25519::Identity::generate();
     let recip_file = tmp.path().join("recipients.txt");
     fs::write(&recip_file, identity.to_public().to_string()).unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: r
 out_dir: {}
 files:
@@ -304,14 +369,20 @@ encryptor:
   encryptor_type: age
   secret_type: recipients_files
   recipients_files: ["{}"]
-"#, out.display(), recip_file.display()));
+"#,
+            out.display(),
+            recip_file.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
 
     let files = list_backup_files(&out);
     let file = fs::File::open(&files[0]).unwrap();
     let decryptor = age::Decryptor::new(std::io::BufReader::new(file)).unwrap();
-    let mut reader = decryptor.decrypt(std::iter::once(&identity as &dyn age::Identity)).unwrap();
+    let mut reader = decryptor
+        .decrypt(std::iter::once(&identity as &dyn age::Identity))
+        .unwrap();
     let mut buf = Vec::new();
     reader.read_to_end(&mut buf).unwrap();
     let entries = tar_entries(&buf);
@@ -323,10 +394,14 @@ encryptor:
 #[test]
 fn test_retention_deletes_old() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
     let old = out.join("ret.2020-01-01T01h00m00s_0000.tar");
     fs::write(&old, "old").unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: ret
 out_dir: {}
 files:
@@ -340,7 +415,10 @@ encryptor:
 retention:
   default_retention: 1day
   min_backups: 1
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
     assert!(!old.exists());
@@ -350,12 +428,16 @@ retention:
 #[test]
 fn test_retention_min_backups() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
     let old1 = out.join("min.2020-01-01T01h00m00s_0000.tar");
     let old2 = out.join("min.2020-01-02T01h00m00s_0000.tar");
     fs::write(&old1, "1").unwrap();
     fs::write(&old2, "2").unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: min
 out_dir: {}
 files:
@@ -369,7 +451,10 @@ encryptor:
 retention:
   default_retention: 1s
   min_backups: 5
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
     assert!(old1.exists());
@@ -382,9 +467,13 @@ retention:
 #[test]
 fn test_command_notification_success() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
     let marker = tmp.path().join("hook.json");
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: n
 out_dir: {out}
 files:
@@ -400,7 +489,11 @@ notifications:
     events: [success]
     command: ["bash", "-c", "cat > {marker}"]
     stdin_json: true
-"#, out = out.display(), marker = marker.display()));
+"#,
+            out = out.display(),
+            marker = marker.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
     assert!(marker.exists());
@@ -411,9 +504,13 @@ notifications:
 #[test]
 fn test_command_notification_event_filtering() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
     let marker = tmp.path().join("nope");
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: f
 out_dir: {out}
 files:
@@ -429,7 +526,11 @@ notifications:
     events: [fatal_error]
     command: ["touch", "{marker}"]
     stdin_json: false
-"#, out = out.display(), marker = marker.display()));
+"#,
+            out = out.display(),
+            marker = marker.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
     assert!(!marker.exists());
@@ -438,8 +539,12 @@ notifications:
 #[test]
 fn test_on_failure_continue() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: c
 out_dir: {}
 files:
@@ -456,7 +561,10 @@ notifications:
     on_failure: continue
     command: ["false"]
     stdin_json: false
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
     assert_eq!(list_backup_files(&out).len(), 1);
@@ -465,8 +573,12 @@ notifications:
 #[test]
 fn test_on_failure_error() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: e
 out_dir: {}
 files:
@@ -483,7 +595,10 @@ notifications:
     on_failure: error
     command: ["false"]
     stdin_json: false
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().failure();
 }
@@ -491,8 +606,12 @@ notifications:
 #[test]
 fn test_on_failure_skip() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: s
 out_dir: {}
 files:
@@ -509,7 +628,10 @@ notifications:
     on_failure: skip
     command: ["false"]
     stdin_json: false
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     // Skip is graceful — exits 0 but no backup produced
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
@@ -519,8 +641,12 @@ notifications:
 #[test]
 fn test_command_timeout() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: t
 out_dir: {}
 files:
@@ -538,7 +664,10 @@ notifications:
     command: ["sleep", "60"]
     stdin_json: false
     timeout: 200ms
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().failure();
 }
@@ -546,9 +675,13 @@ notifications:
 #[test]
 fn test_command_env() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
     let envf = tmp.path().join("env.txt");
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: ev
 out_dir: {out}
 files:
@@ -567,7 +700,11 @@ notifications:
     env_inherit_mode: none
     env:
       MY_VAR: "hello"
-"#, out = out.display(), envf = envf.display()));
+"#,
+            out = out.display(),
+            envf = envf.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
     let content = fs::read_to_string(&envf).unwrap();
@@ -585,14 +722,23 @@ fn test_invalid_config() {
 
 #[test]
 fn test_missing_config() {
-    cmd().arg("-c").arg("/nonexistent.yml").arg("--once").assert().failure();
+    cmd()
+        .arg("-c")
+        .arg("/nonexistent.yml")
+        .arg("--once")
+        .assert()
+        .failure();
 }
 
 #[test]
 fn test_no_cron_runs_once() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: nc
 out_dir: {}
 files:
@@ -603,7 +749,10 @@ compressor:
   compressor_type: none
 encryptor:
   encryptor_type: none
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     // No --once flag, no cron → should run once and exit
     cmd().arg("-c").arg(&cfg).assert().success();
@@ -613,8 +762,12 @@ encryptor:
 #[test]
 fn test_output_filename_format() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out"); fs::create_dir_all(&out).unwrap();
-    let cfg = write_config(tmp.path(), &format!(r#"
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let cfg = write_config(
+        tmp.path(),
+        &format!(
+            r#"
 archive_base_name: fmt
 out_dir: {}
 files:
@@ -627,7 +780,10 @@ encryptor:
   encryptor_type: age
   secret_type: passphrase
   passphrase: "fmt-test-pass1"
-"#, out.display()));
+"#,
+            out.display()
+        ),
+    );
 
     cmd().arg("-c").arg(&cfg).arg("--once").assert().success();
 

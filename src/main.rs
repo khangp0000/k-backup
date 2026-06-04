@@ -58,7 +58,7 @@ fn run(args: Args) -> error::Result<()> {
     let pool = Arc::new(
         rayon::ThreadPoolBuilder::new()
             .build()
-            .map_err(|e| Error::from(std::io::Error::new(std::io::ErrorKind::Other, e)))?,
+            .map_err(|e| Error::from(std::io::Error::other(e)))?,
     );
 
     if args.once || config.cron.is_none() {

@@ -3,13 +3,12 @@
 use crate::config::{ArchiveEntryConfig, BackupConfig};
 use crate::cycle::CycleOutcome;
 use crate::error::{Context, Error, Result};
-use crate::notifications::event::{BackupEvent, DispatchOutcome};
 use crate::notifications;
+use crate::notifications::event::{BackupEvent, DispatchOutcome};
 use crate::pipeline;
 use crate::retention::{self, BackupFile};
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 static TIME_FORMAT: &str = "%Y-%m-%dT%Hh%Mm%Ss%z";
@@ -76,10 +75,13 @@ fn execute_cycle(
     now: DateTime<Utc>,
 ) -> Result<CycleOutcome> {
     // 1. Dispatch start event
-    match notifications::dispatch_event(config, &BackupEvent::BackupCycleStart {
-        config: config.clone(),
-        timestamp: now,
-    }) {
+    match notifications::dispatch_event(
+        config,
+        &BackupEvent::BackupCycleStart {
+            config: config.clone(),
+            timestamp: now,
+        },
+    ) {
         DispatchOutcome::Ok => {}
         DispatchOutcome::Skip(e) => return Ok(CycleOutcome::Skipped(e.to_string())),
         DispatchOutcome::Error(e) => return Err(e),
@@ -95,15 +97,18 @@ fn execute_cycle(
     if entry_errors.has_required_failure() {
         let err_msg = entry_errors.to_string();
         // Dispatch fatal event
-        let _ = notifications::dispatch_event(config, &BackupEvent::FatalError {
-            config: config.clone(),
-            timestamp: now,
-            error: err_msg.clone(),
-        });
-        return Err(Error::from(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Required source(s) failed:\n{}", err_msg),
-        )));
+        let _ = notifications::dispatch_event(
+            config,
+            &BackupEvent::FatalError {
+                config: config.clone(),
+                timestamp: now,
+                error: err_msg.clone(),
+            },
+        );
+        return Err(Error::from(std::io::Error::other(format!(
+            "Required source(s) failed:\n{}",
+            err_msg
+        ))));
     }
 
     // 5. Persist temp → final path
@@ -116,7 +121,7 @@ fn execute_cycle(
     let final_path = config.out_dir.join(&file_name);
     temp_file
         .persist(&final_path)
-        .map_err(|e| std::io::Error::from(e))
+        .map_err(std::io::Error::from)
         .context("Failed to persist archive")?;
 
     let file_size = std::fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0);
@@ -148,12 +153,15 @@ fn execute_cycle(
     // 8. Dispatch success/non-fatal event
     let outcome = if !entry_errors.is_empty() {
         tracing::warn!("Non-fatal errors:\n{}", entry_errors);
-        let dispatch = notifications::dispatch_event(config, &BackupEvent::NonFatalError {
-            config: config.clone(),
-            timestamp: now,
-            output_file: final_path.clone(),
-            errors: entry_errors.to_string(),
-        });
+        let dispatch = notifications::dispatch_event(
+            config,
+            &BackupEvent::NonFatalError {
+                config: config.clone(),
+                timestamp: now,
+                output_file: final_path.clone(),
+                errors: entry_errors.to_string(),
+            },
+        );
         match dispatch {
             DispatchOutcome::Ok => {}
             DispatchOutcome::Skip(e) => return Ok(CycleOutcome::Skipped(e.to_string())),
@@ -161,11 +169,14 @@ fn execute_cycle(
         }
         CycleOutcome::Completed(final_path)
     } else {
-        let dispatch = notifications::dispatch_event(config, &BackupEvent::Success {
-            config: config.clone(),
-            timestamp: now,
-            output_file: final_path.clone(),
-        });
+        let dispatch = notifications::dispatch_event(
+            config,
+            &BackupEvent::Success {
+                config: config.clone(),
+                timestamp: now,
+                output_file: final_path.clone(),
+            },
+        );
         match dispatch {
             DispatchOutcome::Ok => {}
             DispatchOutcome::Skip(e) => return Ok(CycleOutcome::Skipped(e.to_string())),
@@ -185,10 +196,12 @@ fn pre_validate(config: &BackupConfig) -> Result<()> {
     for entry in &config.files {
         match entry {
             ArchiveEntryConfig::Sqlite(c) if c.required => {
-                sources::sqlite::validate(c).context(format!("Pre-validation failed for {:?}", c.src))?;
+                sources::sqlite::validate(c)
+                    .context(format!("Pre-validation failed for {:?}", c.src))?;
             }
             ArchiveEntryConfig::Glob(c) if c.required => {
-                sources::glob::validate(c).context(format!("Pre-validation failed for {:?}", c.src_dir))?;
+                sources::glob::validate(c)
+                    .context(format!("Pre-validation failed for {:?}", c.src_dir))?;
             }
             _ => {}
         }

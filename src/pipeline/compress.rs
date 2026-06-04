@@ -52,7 +52,9 @@ pub fn wrap_writer(
                 Stream::new_lzma_encoder(&opts)?
             };
 
-            Ok(Box::new(FinishableXzEncoder(Some(XzEncoder::new_stream(writer, stream)))))
+            Ok(Box::new(FinishableXzEncoder(Some(XzEncoder::new_stream(
+                writer, stream,
+            )))))
         }
     }
 }

@@ -1,7 +1,7 @@
 //! Entry collector using rayon fold/reduce with bounded channel.
 
 use crate::config::ArchiveEntryConfig;
-use crate::error::{ArchiveError, Error};
+use crate::error::Error;
 use crate::pipeline::entry::ArchiveEntry;
 use crate::pipeline::entry_errors::{EntryError, EntryErrors};
 use crate::pipeline::sources;

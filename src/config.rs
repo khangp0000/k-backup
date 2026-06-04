@@ -1,8 +1,8 @@
 //! Configuration types for k-backup. Deserialized from YAML.
 
-use crate::error::{ConfigError, Error, Result};
+use crate::error::{ConfigError, Result};
 use base64::Engine;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
@@ -42,7 +42,10 @@ impl BackupConfig {
         }
         if !self.out_dir.exists() {
             errors.push(format!("out_dir does not exist: {:?}", self.out_dir));
-        } else if std::fs::metadata(&self.out_dir).map(|m| m.permissions().readonly()).unwrap_or(true) {
+        } else if std::fs::metadata(&self.out_dir)
+            .map(|m| m.permissions().readonly())
+            .unwrap_or(true)
+        {
             errors.push(format!("out_dir is not writable: {:?}", self.out_dir));
         }
         if let Some(ref temp_dir) = self.temp_dir {
@@ -128,7 +131,10 @@ impl ArchiveEntryConfig {
                 if c.dst.as_os_str().is_empty() {
                     errors.push(format!("files[{}]: dst must not be empty", index));
                 }
-                if base64::engine::general_purpose::STANDARD.decode(&c.content).is_err() {
+                if base64::engine::general_purpose::STANDARD
+                    .decode(&c.content)
+                    .is_err()
+                {
                     errors.push(format!("files[{}]: invalid base64 content", index));
                 }
             }
@@ -268,10 +274,14 @@ impl AgeConfig {
 impl Debug for AgeConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Passphrase { .. } => f.debug_struct("Passphrase").field("passphrase", &"***").finish(),
-            Self::RecipientsFiles { recipients_files } => {
-                f.debug_struct("RecipientsFiles").field("recipients_files", recipients_files).finish()
-            }
+            Self::Passphrase { .. } => f
+                .debug_struct("Passphrase")
+                .field("passphrase", &"***")
+                .finish(),
+            Self::RecipientsFiles { recipients_files } => f
+                .debug_struct("RecipientsFiles")
+                .field("recipients_files", recipients_files)
+                .finish(),
         }
     }
 }
@@ -363,12 +373,18 @@ impl NotificationConfig {
         match &self.target {
             NotificationTarget::Smtp(s) => {
                 if s.to.is_empty() {
-                    errors.push(format!("notifications[{}]: to list must not be empty", index));
+                    errors.push(format!(
+                        "notifications[{}]: to list must not be empty",
+                        index
+                    ));
                 }
             }
             NotificationTarget::Command(c) => {
                 if c.command.is_empty() {
-                    errors.push(format!("notifications[{}]: command must not be empty", index));
+                    errors.push(format!(
+                        "notifications[{}]: command must not be empty",
+                        index
+                    ));
                 }
             }
         }
@@ -495,7 +511,9 @@ mod tests {
         let mut cfg = minimal_config(tmp.path());
         cfg.archive_base_name = "".into();
         let err = cfg.validate().unwrap_err();
-        assert!(err.to_string().contains("archive_base_name must not be empty"));
+        assert!(err
+            .to_string()
+            .contains("archive_base_name must not be empty"));
     }
 
     #[test]
@@ -513,7 +531,9 @@ mod tests {
         let mut cfg = minimal_config(tmp.path());
         cfg.files = vec![];
         let err = cfg.validate().unwrap_err();
-        assert!(err.to_string().contains("files must contain at least one entry"));
+        assert!(err
+            .to_string()
+            .contains("files must contain at least one entry"));
     }
 
     #[test]
@@ -524,7 +544,9 @@ mod tests {
             passphrase: RedactedString::new("short"),
         });
         let err = cfg.validate().unwrap_err();
-        assert!(err.to_string().contains("passphrase must be at least 8 characters"));
+        assert!(err
+            .to_string()
+            .contains("passphrase must be at least 8 characters"));
     }
 
     #[test]

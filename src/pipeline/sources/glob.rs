@@ -10,7 +10,9 @@ use walkdir::WalkDir;
 
 /// Pre-validates that the source directory exists.
 pub fn validate(config: &GlobSourceConfig) -> std::result::Result<(), ArchiveError> {
-    fs::metadata(&config.src_dir).map(|_| ()).map_err(ArchiveError::from)
+    fs::metadata(&config.src_dir)
+        .map(|_| ())
+        .map_err(ArchiveError::from)
 }
 
 /// Returns an iterator of archive entries matching the glob patterns.
@@ -21,12 +23,18 @@ pub fn iter_entries(
     let mut builder = GlobSetBuilder::new();
     for pattern in &config.globset {
         let glob = GlobBuilder::new(pattern).build().map_err(|e| {
-            ArchiveError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))
+            ArchiveError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                e.to_string(),
+            ))
         })?;
         builder.add(glob);
     }
     let globset = builder.build().map_err(|e| {
-        ArchiveError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))
+        ArchiveError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            e.to_string(),
+        ))
     })?;
 
     let follow_links = config.symlink_mode == SymlinkMode::Follow;
@@ -116,7 +124,11 @@ mod tests {
     use std::io::Write;
     use tempfile::TempDir;
 
-    fn make_config(dir: &std::path::Path, patterns: Vec<&str>, dst_dir: Option<&str>) -> GlobSourceConfig {
+    fn make_config(
+        dir: &std::path::Path,
+        patterns: Vec<&str>,
+        dst_dir: Option<&str>,
+    ) -> GlobSourceConfig {
         GlobSourceConfig {
             src_dir: dir.to_path_buf(),
             dst_dir: dst_dir.map(|s| s.to_string()),
@@ -154,7 +166,11 @@ mod tests {
 
     #[test]
     fn validate_fails_on_nonexistent_dir() {
-        let config = make_config(std::path::Path::new("/nonexistent/path/xyz"), vec!["*"], None);
+        let config = make_config(
+            std::path::Path::new("/nonexistent/path/xyz"),
+            vec!["*"],
+            None,
+        );
         assert!(validate(&config).is_err());
     }
 

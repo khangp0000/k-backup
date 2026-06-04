@@ -53,7 +53,7 @@ pub fn wrap_writer(
                 ));
                 let age_writer = encryptor
                     .wrap_output(writer)
-                    .map_err(|e| EncryptError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+                    .map_err(|e| EncryptError::Io(std::io::Error::other(e)))?;
                 Ok(Box::new(AgeWriter::Age(age_writer)))
             }
             AgeConfig::RecipientsFiles { recipients_files } => {
@@ -64,11 +64,18 @@ pub fn wrap_writer(
 
                 let mut stdin_guard = age::cli_common::StdinGuard::new(false);
                 let recipients = age::cli_common::read_recipients(
-                    vec![], file_strings, vec![], None, &mut stdin_guard,
-                ).map_err(|e| EncryptError::InvalidRecipients(e.to_string()))?;
+                    vec![],
+                    file_strings,
+                    vec![],
+                    None,
+                    &mut stdin_guard,
+                )
+                .map_err(|e| EncryptError::InvalidRecipients(e.to_string()))?;
 
                 if recipients.is_empty() {
-                    return Err(EncryptError::InvalidRecipients("No recipients found".into()));
+                    return Err(EncryptError::InvalidRecipients(
+                        "No recipients found".into(),
+                    ));
                 }
 
                 let encryptor =
@@ -77,7 +84,7 @@ pub fn wrap_writer(
 
                 let age_writer = encryptor
                     .wrap_output(writer)
-                    .map_err(|e| EncryptError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+                    .map_err(|e| EncryptError::Io(std::io::Error::other(e)))?;
                 Ok(Box::new(AgeWriter::Age(age_writer)))
             }
         },

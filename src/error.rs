@@ -61,10 +61,6 @@ impl Error {
     pub fn multiple(errors: Vec<Error>) -> Self {
         Self(Box::new(ErrorKind::Multiple(errors)))
     }
-
-    pub fn kind(&self) -> &ErrorKind {
-        &self.0
-    }
 }
 
 fn display_multiple(errors: &[Error]) -> String {

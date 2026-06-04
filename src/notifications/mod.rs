@@ -42,7 +42,9 @@ pub fn dispatch_event(config: &BackupConfig, event: &BackupEvent) -> DispatchOut
                 OnFailure::Error => {
                     tracing::error!("{} (fatal)", e);
                     worst = Some(match worst {
-                        Some((OnFailure::Error, existing)) => (OnFailure::Error, Error::multiple(vec![existing, e])),
+                        Some((OnFailure::Error, existing)) => {
+                            (OnFailure::Error, Error::multiple(vec![existing, e]))
+                        }
                         _ => (OnFailure::Error, e),
                     });
                 }

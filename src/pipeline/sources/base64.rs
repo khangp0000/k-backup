@@ -6,7 +6,9 @@ use crate::pipeline::entry::{ArchiveEntry, ArchiveEntryKind};
 use base64::Engine;
 
 /// Creates an archive entry from base64-decoded content.
-pub fn create_entry(config: &Base64SourceConfig) -> std::result::Result<ArchiveEntry, ArchiveError> {
+pub fn create_entry(
+    config: &Base64SourceConfig,
+) -> std::result::Result<ArchiveEntry, ArchiveError> {
     let data = base64::engine::general_purpose::STANDARD
         .decode(&config.content)
         .map_err(ArchiveError::from)?;
