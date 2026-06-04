@@ -1,36 +1,72 @@
 cron: "0 1 * * *"
 archive_base_name: backup
-out_dir: ./backup/
+out_dir: ./backups/
+# temp_dir: /dev/shm  # optional: tmpfs for speed, disk for large backups
+
 files:
   - type: sqlite
-    src: /var/lib/vaultwarden/db.sqlite3
-    dst: db.sqlite3
+    src: /var/lib/app/database.sqlite3
+    dst: database.sqlite3
+    required: true
+
   - type: glob
-    src_dir: /var/lib/vaultwarden/
+    src_dir: /var/lib/app/
     globset:
-      - sends/**/*
-      - attachments/**/*
-      - rsa_key*
-      - icon_cache/**/*
+      - "uploads/**/*"
+      - "config/**/*"
+    symlink_mode: follow
+    max_depth: 10
+    required: true
+
+  - type: glob
+    src_dir: /var/log/app/
+    globset:
+      - "**/*.log"
+    symlink_mode: skip
+    required: false
+
   - type: base64
     content: "SGVsbG8gSSBsb3ZlIHU="
-    dst: test.iluvu.txt
-notifications:
-  - type: "smtp"
-    host: "smtp.example.com"
-    smtp_mode: "Ssl"
-    from: "admin@example.com"
-    to: [ "you@example.com", "me@example.com" ]
-    username: "username"
-    password: "password"
+    dst: message.txt
+
+compressor:
+  compressor_type: xz
+  level: 6
+  thread: 4
+
 encryptor:
   encryptor_type: age
   secret_type: passphrase
-  passphrase: "password"
-compressor:
-  compressor_type: xz
+  passphrase: "your-secure-passphrase"
+
 retention:
   default_retention: 7days
-  daily_retention: 3day
-  monthly_retention: 3month
-  yearly_retention: 3year
+  daily_retention: 30days
+  weekly_retention: 12weeks
+  monthly_retention: 12months
+  yearly_retention: 5years
+  min_backups: 3
+
+notifications:
+  - name: email-ops
+    type: smtp
+    events: [non_fatal_error, fatal_error]
+    on_failure: continue
+    host: smtp.gmail.com
+    smtp_mode: Ssl
+    from: backup@example.com
+    to: ["admin@example.com"]
+    username: backup@example.com
+    password: app-password
+
+  - name: backup-hook
+    type: command
+    events: [success, non_fatal_error, fatal_error]
+    on_failure: skip
+    command: ["/usr/local/bin/backup-notify", "--event-stdin"]
+    stdin_json: true
+    env_inherit_mode: none
+    env:
+      BACKUP_APP: "k-backup"
+    timeout: 60s
+    max_output_size: 65536
