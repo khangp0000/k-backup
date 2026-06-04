@@ -17,7 +17,7 @@ jobs:
       version_changed: ${{ steps.check.outputs.version_changed }}
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -39,7 +39,7 @@ jobs:
     if: needs.check-version.outputs.version_changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -54,7 +54,7 @@ jobs:
           mkdir -p dist
           cp target/release/${{ env.BINARY_NAME }} dist/k_backup-linux-amd64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: k_backup-linux-amd64
           path: dist/k_backup-linux-amd64
@@ -64,7 +64,7 @@ jobs:
     if: needs.check-version.outputs.version_changed == 'true'
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -76,7 +76,7 @@ jobs:
           mkdir -p dist
           cp target/release/${{ env.BINARY_NAME }} dist/k_backup-linux-arm64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: k_backup-linux-arm64
           path: dist/k_backup-linux-arm64
@@ -86,7 +86,7 @@ jobs:
     if: needs.check-version.outputs.version_changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
 
