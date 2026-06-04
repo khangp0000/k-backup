@@ -2,7 +2,7 @@
 
 use crate::config::RetentionConfig;
 use crate::error::RetentionError;
-use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
 use std::path::PathBuf;
 
 /// A backup file with its parsed timestamp.
@@ -23,14 +23,22 @@ pub fn get_deletions(
     }
 
     let default_retention = Duration::from_std(config.default_retention).unwrap();
-    let daily = config.daily_retention.map(|d| Duration::from_std(d).unwrap());
-    let weekly = config.weekly_retention.map(|d| Duration::from_std(d).unwrap());
-    let monthly = config.monthly_retention.map(|d| Duration::from_std(d).unwrap());
-    let yearly = config.yearly_retention.map(|d| Duration::from_std(d).unwrap());
+    let daily = config
+        .daily_retention
+        .map(|d| Duration::from_std(d).unwrap());
+    let weekly = config
+        .weekly_retention
+        .map(|d| Duration::from_std(d).unwrap());
+    let monthly = config
+        .monthly_retention
+        .map(|d| Duration::from_std(d).unwrap());
+    let yearly = config
+        .yearly_retention
+        .map(|d| Duration::from_std(d).unwrap());
 
     // Sort newest first
     let mut sorted: Vec<&BackupFile> = backups.to_vec();
-    sorted.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    sorted.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
 
     let mut last_daily: Option<(i32, u32, u32)> = None;
     let mut last_weekly: Option<(i32, u32)> = None;
@@ -38,15 +46,17 @@ pub fn get_deletions(
     let mut last_yearly: Option<i32> = None;
 
     let mut to_delete: Vec<PathBuf> = Vec::new();
-    let mut kept = 0;
 
     for backup in &sorted {
         let age = now - backup.timestamp;
         let dt = backup.timestamp;
 
-        // Within default retention — always keep
+        // Within default retention — always keep, but claim GFS slots
         if age <= default_retention {
-            kept += 1;
+            last_daily = Some((dt.year(), dt.month(), dt.day()));
+            last_weekly = Some((dt.iso_week().year(), dt.iso_week().week()));
+            last_monthly = Some((dt.year(), dt.month()));
+            last_yearly = Some(dt.year());
             continue;
         }
 
@@ -102,9 +112,7 @@ pub fn get_deletions(
             }
         }
 
-        if keep {
-            kept += 1;
-        } else {
+        if !keep {
             to_delete.push(backup.path.clone());
         }
     }
@@ -137,6 +145,7 @@ pub fn delete_files(paths: &[PathBuf]) -> Vec<RetentionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use std::time::Duration as StdDuration;
 
     fn make_config(default_days: u64, min_backups: usize) -> RetentionConfig {
@@ -205,5 +214,39 @@ mod tests {
         let backups: Vec<&BackupFile> = vec![];
         let deletions = get_deletions(&backups, now, &config);
         assert!(deletions.is_empty());
+    }
+
+    #[test]
+    fn test_default_retention_claims_gfs_slots() {
+        // A backup within default_retention for June should prevent keeping
+        // an older June backup via monthly_retention (same month already claimed)
+        let now = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+
+        let config = RetentionConfig {
+            default_retention: std::time::Duration::from_secs(7 * 86400), // 7 days
+            daily_retention: None,
+            weekly_retention: None,
+            monthly_retention: Some(std::time::Duration::from_secs(90 * 86400)), // 90 days
+            yearly_retention: None,
+            min_backups: 1,
+        };
+
+        let recent = BackupFile {
+            path: PathBuf::from("/backups/recent.tar"),
+            timestamp: now - chrono::Duration::days(2), // June 13
+        };
+        let older = BackupFile {
+            path: PathBuf::from("/backups/older_june.tar"),
+            timestamp: now - chrono::Duration::days(10), // June 5
+        };
+        let backups: Vec<&BackupFile> = vec![&recent, &older];
+
+        let deletions = get_deletions(&backups, now, &config);
+        // The older June backup should be deleted because the recent one
+        // already claims the June monthly slot
+        assert!(
+            deletions.contains(&PathBuf::from("/backups/older_june.tar")),
+            "Older same-month backup should be deleted (slot claimed by default retention backup)"
+        );
     }
 }
