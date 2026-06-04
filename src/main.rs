@@ -1,85 +1,69 @@
-use k_backup::backup::backup_config::BackupConfig;
-use k_backup::backup::result_error::error::Error;
-use k_backup::backup::result_error::AddMsg;
+mod config;
+mod cycle;
+mod error;
+mod notifications;
+mod pipeline;
+mod retention;
+mod scheduler;
 
 use clap::Parser;
-use rayon::ThreadPoolBuilder;
-use tracing::error;
-use validator::Validate;
-
+use error::{Context, Error};
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::exit;
+use std::sync::Arc;
 
-/// k-backup: Automated backup tool with encryption, compression, and retention
-///
-/// Creates scheduled backups of files and SQLite databases using:
-/// - Cron-based scheduling
-/// - XZ compression
-/// - Age encryption
-/// - Configurable retention policies
-///
-/// The tool runs as a daemon, continuously checking the cron schedule
-/// and creating backups when due.
+/// k-backup: Automated backup with encryption, compression, and retention
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(version, about)]
 struct Args {
     /// Path to YAML configuration file
     #[arg(short, long)]
     config: PathBuf,
-
-    /// Run a single backup cycle and exit instead of running as a daemon
+    /// Run a single backup cycle and exit
     #[arg(long)]
     once: bool,
 }
 
 fn main() {
-    // Initialize structured logging for the application
     tracing_subscriber::fmt()
         .with_level(true)
         .with_file(true)
         .with_line_number(true)
         .with_thread_names(true)
-        .with_thread_ids(true)
         .with_target(true)
         .init();
 
     let args = Args::parse();
 
-    // Create thread pool for parallel operations during backup creation
-    // Used for concurrent file processing and compression
-    let thread_pool = ThreadPoolBuilder::new().build().unwrap();
+    let result = run(args);
+    if let Err(e) = result {
+        tracing::error!("{}", e);
+        exit(1);
+    }
+}
 
-    // Load, parse, and validate configuration file
-    let res = File::open(&args.config)
-        .map_err(Error::from)
-        // Parse YAML configuration into BackupConfig struct
-        .and_then(|f| {
-            serde_yml::from_reader::<_, BackupConfig>(f)
-                .map_err(Error::from)
-                .add_msg(format!("Parse YAML config failed: {:?}", &args.config))
-        })
-        // Validate configuration fields (cron syntax, paths, etc.)
-        .and_then(|bc| {
-            bc.validate()
-                .map_err(Error::from)
-                .map(|_| bc)
-                .add_msg(format!("Config validation failed: {:?}", &args.config))
-        })
-        // Run backup: once if --once flag or no cron, otherwise daemon loop
-        .and_then(|bc| {
-            if args.once || bc.cron().is_none() {
-                bc.run_once(thread_pool.into())
-            } else {
-                bc.start_loop(thread_pool.into())
-            }
-        });
+fn run(args: Args) -> error::Result<()> {
+    let config: Arc<config::BackupConfig> = {
+        let file = File::open(&args.config)
+            .map_err(Error::from)
+            .context(format!("Failed to open config: {:?}", args.config))?;
+        serde_saphyr::from_reader(file)
+            .map_err(|e| Error::from(error::ConfigError::from(e)))
+            .context("Failed to parse config")?
+    };
 
-    match res {
-        Ok(_) => {}
-        Err(e) => {
-            error!("{e}");
-            exit(1);
-        }
+    config.validate()?;
+
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .build()
+            .map_err(|e| Error::from(std::io::Error::new(std::io::ErrorKind::Other, e)))?,
+    );
+
+    if args.once || config.cron.is_none() {
+        scheduler::run_once(config, pool)
+    } else {
+        scheduler::start_loop(config, pool)
     }
 }
