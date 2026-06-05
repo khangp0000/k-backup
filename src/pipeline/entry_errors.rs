@@ -81,7 +81,7 @@ mod tests {
 
     fn required_source() -> Arc<ArchiveEntryConfig> {
         Arc::new(ArchiveEntryConfig::Base64(Base64SourceConfig {
-            content: "YQ==".into(),
+            content: crate::config::Base64Bytes::new(b"a".to_vec()),
             dst: "a.txt".into(),
         }))
     }
@@ -90,7 +90,7 @@ mod tests {
         Arc::new(ArchiveEntryConfig::Glob(GlobSourceConfig {
             src_dir: "/tmp".into(),
             dst_dir: None,
-            globset: vec!["*".into()],
+            globset: crate::config::CompiledGlobSet::new(vec!["*".into()]).unwrap(),
             symlink_mode: SymlinkMode::Follow,
             max_depth: 0,
             required: false,

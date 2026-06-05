@@ -1,14 +1,14 @@
 //! Grandfather-father-son retention logic.
 
 use crate::config::RetentionConfig;
-use crate::error::RetentionError;
 use chrono::{DateTime, Datelike, Duration, Utc};
-use std::path::PathBuf;
+use std::path::Path;
+use std::rc::Rc;
 
 /// A backup file with its parsed timestamp.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BackupFile {
-    pub path: PathBuf,
+    pub path: Rc<Path>,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -17,7 +17,7 @@ pub fn get_deletions(
     backups: &[&BackupFile],
     now: DateTime<Utc>,
     config: &RetentionConfig,
-) -> Vec<PathBuf> {
+) -> Vec<Rc<Path>> {
     if backups.len() <= config.min_backups {
         return Vec::new();
     }
@@ -45,7 +45,7 @@ pub fn get_deletions(
     let mut last_monthly: Option<(i32, u32)> = None;
     let mut last_yearly: Option<i32> = None;
 
-    let mut to_delete: Vec<PathBuf> = Vec::new();
+    let mut to_delete: Vec<Rc<Path>> = Vec::new();
 
     for backup in &sorted {
         let age = now - backup.timestamp;
@@ -113,7 +113,7 @@ pub fn get_deletions(
         }
 
         if !keep {
-            to_delete.push(backup.path.clone());
+            to_delete.push(Rc::clone(&backup.path));
         }
     }
 
@@ -125,21 +125,6 @@ pub fn get_deletions(
     }
 
     to_delete
-}
-
-/// Deletes files, collecting errors for files that couldn't be removed.
-pub fn delete_files(paths: &[PathBuf]) -> Vec<RetentionError> {
-    paths
-        .iter()
-        .filter_map(|path| {
-            std::fs::remove_file(path)
-                .err()
-                .map(|source| RetentionError {
-                    path: path.clone(),
-                    source,
-                })
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -161,7 +146,7 @@ mod tests {
 
     fn make_backup(path: &str, days_ago: i64, now: DateTime<Utc>) -> BackupFile {
         BackupFile {
-            path: PathBuf::from(path),
+            path: Rc::from(Path::new(path)),
             timestamp: now - Duration::days(days_ago),
         }
     }
@@ -175,7 +160,7 @@ mod tests {
         let config = make_config(7, 1);
         let backups: Vec<&BackupFile> = vec![&b1, &b2];
         let deletions = get_deletions(&backups, now, &config);
-        assert_eq!(deletions, vec![PathBuf::from("old.age")]);
+        assert_eq!(deletions, vec![Rc::from(Path::new("old.age"))]);
     }
 
     #[test]
@@ -232,11 +217,11 @@ mod tests {
         };
 
         let recent = BackupFile {
-            path: PathBuf::from("/backups/recent.tar"),
+            path: Rc::from(Path::new("/backups/recent.tar")),
             timestamp: now - chrono::Duration::days(2), // June 13
         };
         let older = BackupFile {
-            path: PathBuf::from("/backups/older_june.tar"),
+            path: Rc::from(Path::new("/backups/older_june.tar")),
             timestamp: now - chrono::Duration::days(10), // June 5
         };
         let backups: Vec<&BackupFile> = vec![&recent, &older];
@@ -245,7 +230,7 @@ mod tests {
         // The older June backup should be deleted because the recent one
         // already claims the June monthly slot
         assert!(
-            deletions.contains(&PathBuf::from("/backups/older_june.tar")),
+            deletions.contains(&Rc::from(Path::new("/backups/older_june.tar"))),
             "Older same-month backup should be deleted (slot claimed by default retention backup)"
         );
     }

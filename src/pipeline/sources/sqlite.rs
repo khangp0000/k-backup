@@ -24,18 +24,20 @@ pub fn create_entry(
     }
     .map_err(ArchiveError::from)?;
 
+    let temp_path = tmp_named.into_temp_path();
+
     {
         let src_conn = Connection::open_with_flags(&config.src, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let mut dst_conn = Connection::open(tmp_named.path())?;
+        let mut dst_conn = Connection::open(&temp_path)?;
         let backup = rusqlite::backup::Backup::new(&src_conn, &mut dst_conn)?;
         backup.run_to_completion(100, std::time::Duration::from_millis(10), None)?;
     }
 
-    let file = File::open(tmp_named.path()).map_err(ArchiveError::from)?;
+    let file = File::open(&temp_path).map_err(ArchiveError::from)?;
 
     Ok(ArchiveEntry {
         dst: config.dst.clone(),
-        kind: ArchiveEntryKind::File(file),
+        kind: ArchiveEntryKind::TempFile(file, temp_path),
     })
 }
 
@@ -74,8 +76,8 @@ mod tests {
         let entry = create_entry(&config, Some(tmp.path())).unwrap();
         assert_eq!(entry.dst, PathBuf::from("backup.db"));
         match entry.kind {
-            ArchiveEntryKind::File(_) => {} // good
-            _ => panic!("expected File kind"),
+            ArchiveEntryKind::TempFile(_, _) => {} // good
+            _ => panic!("expected TempFile kind"),
         }
     }
 }

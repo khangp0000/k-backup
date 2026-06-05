@@ -1,15 +1,15 @@
 //! Configuration types for k-backup. Deserialized from YAML.
 
 use crate::error::{ConfigError, Result};
-use base64::Engine;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::path::PathBuf;
 use std::result;
+use std::sync::Arc;
 use std::time::Duration;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 // ─── Top-level Config ─────────────────────────────────────────────────────
 
@@ -131,12 +131,6 @@ impl ArchiveEntryConfig {
                 if c.dst.as_os_str().is_empty() {
                     errors.push(format!("files[{}]: dst must not be empty", index));
                 }
-                if base64::engine::general_purpose::STANDARD
-                    .decode(&c.content)
-                    .is_err()
-                {
-                    errors.push(format!("files[{}]: invalid base64 content", index));
-                }
             }
         }
     }
@@ -157,7 +151,7 @@ pub struct GlobSourceConfig {
     pub src_dir: PathBuf,
     #[serde(default)]
     pub dst_dir: Option<String>,
-    pub globset: Vec<String>,
+    pub globset: CompiledGlobSet,
     #[serde(default = "default_symlink_mode")]
     pub symlink_mode: SymlinkMode,
     #[serde(default)]
@@ -166,11 +160,122 @@ pub struct GlobSourceConfig {
     pub required: bool,
 }
 
+/// A validated glob set that compiles patterns at deserialization time.
+/// Accepts a single string or a list of strings in YAML/JSON.
+#[derive(Clone)]
+pub struct CompiledGlobSet {
+    patterns: Vec<String>,
+    compiled: globset::GlobSet,
+}
+
+impl CompiledGlobSet {
+    pub fn new(patterns: Vec<String>) -> std::result::Result<Self, globset::Error> {
+        let mut builder = globset::GlobSetBuilder::new();
+        for pattern in &patterns {
+            builder.add(globset::GlobBuilder::new(pattern).build()?);
+        }
+        Ok(Self {
+            compiled: builder.build()?,
+            patterns,
+        })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.patterns.is_empty()
+    }
+
+    pub fn is_match(&self, path: &std::path::Path) -> bool {
+        self.compiled.is_match(path)
+    }
+}
+
+impl fmt::Debug for CompiledGlobSet {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(&self.patterns).finish()
+    }
+}
+
+impl Serialize for CompiledGlobSet {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> result::Result<S::Ok, S::Error> {
+        self.patterns.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for CompiledGlobSet {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> result::Result<Self, D::Error> {
+        struct GlobSetVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GlobSetVisitor {
+            type Value = CompiledGlobSet;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "a glob pattern string or list of glob patterns")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> result::Result<Self::Value, E> {
+                CompiledGlobSet::new(vec![v.to_string()]).map_err(E::custom)
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> result::Result<Self::Value, A::Error> {
+                let mut patterns = Vec::new();
+                while let Some(s) = seq.next_element::<String>()? {
+                    patterns.push(s);
+                }
+                CompiledGlobSet::new(patterns).map_err(serde::de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_any(GlobSetVisitor)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Base64SourceConfig {
-    pub content: String,
+    pub content: Base64Bytes,
     pub dst: PathBuf,
+}
+
+/// Raw bytes decoded from base64 at deserialization. Shared via Arc to avoid cloning.
+#[derive(Clone)]
+pub struct Base64Bytes(Arc<[u8]>);
+
+impl Base64Bytes {
+    #[cfg(test)]
+    pub fn new(data: Vec<u8>) -> Self {
+        Self(data.into())
+    }
+
+    pub fn arc(&self) -> &Arc<[u8]> {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Base64Bytes {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "Base64Bytes({} bytes)", self.0.len())
+    }
+}
+
+impl Serialize for Base64Bytes {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> result::Result<S::Ok, S::Error> {
+        use base64::Engine;
+        serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(&*self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for Base64Bytes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> result::Result<Self, D::Error> {
+        use base64::Engine;
+        let s = String::deserialize(deserializer)?;
+        base64::engine::general_purpose::STANDARD
+            .decode(&s)
+            .map(|v| Self(v.into()))
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -288,7 +393,7 @@ impl Debug for AgeConfig {
 
 // ─── Redacted String ──────────────────────────────────────────────────────
 
-#[derive(Clone, Zeroize)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct RedactedString {
     inner: String,
 }
@@ -495,7 +600,7 @@ mod tests {
             out_dir: tmp.to_path_buf(),
             temp_dir: None,
             files: vec![ArchiveEntryConfig::Base64(Base64SourceConfig {
-                content: "aGVsbG8=".into(),
+                content: Base64Bytes::new(b"hello".to_vec()),
                 dst: "hello.txt".into(),
             })],
             notifications: vec![],

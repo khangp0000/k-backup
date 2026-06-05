@@ -32,7 +32,7 @@ pub fn write_tar(
                 header.set_mode(0o644);
                 header.set_entry_type(tar::EntryType::Regular);
                 header.set_cksum();
-                builder.append_data(&mut header, &entry.dst, data.as_slice())?;
+                builder.append_data(&mut header, &entry.dst, &*data)?;
             }
             ArchiveEntryKind::Symlink(target) => {
                 let mut header = Header::new_gnu();
@@ -40,6 +40,18 @@ pub fn write_tar(
                 header.set_entry_type(tar::EntryType::Symlink);
                 header.set_cksum();
                 builder.append_link(&mut header, &entry.dst, &target)?;
+            }
+            ArchiveEntryKind::TempFile(mut file, temp_path) => {
+                let size = file.metadata().map_err(ArchiveError::from)?.len();
+                let mut header = Header::new_gnu();
+                header.set_size(size);
+                header.set_mode(0o644);
+                header.set_entry_type(tar::EntryType::Regular);
+                header.set_cksum();
+                builder.append_data(&mut header, &entry.dst, &mut file)?;
+                if let Err(e) = temp_path.close() {
+                    tracing::warn!("Failed to remove temp file: {}", e);
+                }
             }
         }
         count += 1;
@@ -57,49 +69,44 @@ mod tests {
     use std::path::PathBuf;
 
     fn tar_to_vec(entries: Vec<ArchiveEntry>) -> Vec<u8> {
-        let mut builder = tar::Builder::new(Vec::new());
-        for entry in entries {
-            match entry.kind {
-                ArchiveEntryKind::Memory(data) => {
-                    let mut header = Header::new_gnu();
-                    header.set_size(data.len() as u64);
-                    header.set_mode(0o644);
-                    header.set_entry_type(tar::EntryType::Regular);
-                    header.set_cksum();
-                    builder
-                        .append_data(&mut header, &entry.dst, data.as_slice())
-                        .unwrap();
-                }
-                ArchiveEntryKind::File(mut file) => {
-                    let size = file.metadata().unwrap().len();
-                    let mut header = Header::new_gnu();
-                    header.set_size(size);
-                    header.set_mode(0o644);
-                    header.set_entry_type(tar::EntryType::Regular);
-                    header.set_cksum();
-                    builder
-                        .append_data(&mut header, &entry.dst, &mut file)
-                        .unwrap();
-                }
-                ArchiveEntryKind::Symlink(target) => {
-                    let mut header = Header::new_gnu();
-                    header.set_size(0);
-                    header.set_entry_type(tar::EntryType::Symlink);
-                    header.set_cksum();
-                    builder
-                        .append_link(&mut header, &entry.dst, &target)
-                        .unwrap();
-                }
+        use crate::pipeline::FinishableWrite;
+        use std::io::Write;
+        use std::sync::mpsc::sync_channel;
+        use std::sync::{Arc, Mutex};
+
+        struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+        impl Write for SharedWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
             }
         }
-        builder.into_inner().unwrap()
+        impl FinishableWrite for SharedWriter {
+            fn finish(self: Box<Self>) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let writer: Box<dyn FinishableWrite> = Box::new(SharedWriter(buf.clone()));
+
+        let (tx, rx) = sync_channel(entries.len().max(1));
+        for entry in entries {
+            tx.send(entry).unwrap();
+        }
+        drop(tx);
+
+        write_tar(rx, writer).unwrap().finish().unwrap();
+        Arc::try_unwrap(buf).unwrap().into_inner().unwrap()
     }
 
     #[test]
     fn test_write_memory_entry() {
         let tar_data = tar_to_vec(vec![ArchiveEntry {
             dst: PathBuf::from("hello.txt"),
-            kind: ArchiveEntryKind::Memory(b"hello world".to_vec()),
+            kind: ArchiveEntryKind::Memory(b"hello world".to_vec().into()),
         }]);
 
         let mut archive = tar::Archive::new(tar_data.as_slice());

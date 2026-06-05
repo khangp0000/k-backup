@@ -49,7 +49,7 @@ pub fn wrap_writer(
         EncryptorConfig::Age(age_config) => match age_config {
             AgeConfig::Passphrase { passphrase } => {
                 let encryptor = age::Encryptor::with_user_passphrase(SecretString::new(
-                    passphrase.inner().to_string().into(),
+                    passphrase.inner().into(),
                 ));
                 let age_writer = encryptor
                     .wrap_output(writer)
