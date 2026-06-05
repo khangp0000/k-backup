@@ -1,0 +1,37 @@
+name: Cache factory
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+  workflow_dispatch:
+
+concurrency:
+  group: cache-factory
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  make-cache-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+      - run: cargo test --locked --features "fully-static,vendored-openssl" --no-run
+
+  make-cache-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+      - run: cargo test --locked --features "fully-static,vendored-openssl" --no-run
