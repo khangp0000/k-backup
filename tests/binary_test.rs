@@ -4,7 +4,6 @@
 //!   K_BACKUP_BIN=/path/to/k-backup/target/debug/k_backup cargo test --test binary_test
 
 use assert_cmd::Command;
-use predicates::prelude::*;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};

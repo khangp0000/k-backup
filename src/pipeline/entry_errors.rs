@@ -100,7 +100,7 @@ mod tests {
     fn make_entry_error(source: Arc<ArchiveEntryConfig>) -> EntryError {
         EntryError {
             source,
-            error: Error::from(io::Error::new(io::ErrorKind::Other, "test error")),
+            error: Error::from(io::Error::other("test error")),
         }
     }
 

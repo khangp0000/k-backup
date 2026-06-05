@@ -88,24 +88,11 @@ fn send_email(config: &SmtpConfig, subject: &str, body: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        BackupConfig, CompressorConfig, EncryptorConfig, RedactedString, SmtpConfig, SmtpMode,
-    };
+    use crate::config::{BackupConfig, CompressorConfig, EncryptorConfig};
     use crate::notifications::event::BackupEvent;
     use chrono::{TimeZone, Utc};
     use std::path::PathBuf;
     use std::sync::Arc;
-
-    fn test_smtp_config(port: u16) -> SmtpConfig {
-        SmtpConfig {
-            host: format!("127.0.0.1:{}", port),
-            smtp_mode: SmtpMode::Unsecured,
-            from: "test@example.com".to_string(),
-            to: vec!["recipient@example.com".to_string()],
-            username: "testuser".to_string(),
-            password: RedactedString::new("testpass"),
-        }
-    }
 
     fn test_event() -> BackupEvent {
         BackupEvent::Success {
@@ -126,7 +113,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     fn test_smtp_send_with_mock() {
         use maik;
 

@@ -121,7 +121,7 @@ fn make_dst(config: &GlobSourceConfig, path: &std::path::Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+
     use tempfile::TempDir;
 
     fn make_config(
