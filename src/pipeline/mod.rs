@@ -12,6 +12,7 @@ use crate::config::BackupConfig;
 use crate::error::{Context, Error, Result};
 use entry_errors::EntryErrors;
 use std::io::Write;
+use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 /// A writer that can be finalized (flush compression state, write auth tags).
@@ -42,7 +43,7 @@ impl<W: Write + Send> FinishableWrite for PassthroughWriter<W> {
 /// Returns (temp_file, entry_errors).
 pub fn run(
     config: &BackupConfig,
-    pool: &rayon::ThreadPool,
+    pool: &Arc<rayon::ThreadPool>,
 ) -> Result<(NamedTempFile, EntryErrors)> {
     let temp_file = match &config.temp_dir {
         Some(dir) => NamedTempFile::new_in(dir),
@@ -51,7 +52,8 @@ pub fn run(
     .context("Failed to create temp file")?;
     let file = temp_file.reopen().context("Failed to reopen temp file")?;
 
-    let (rx, entry_errors) = collector::collect(&config.files, pool, config.temp_dir.as_deref());
+    // Spawn collector on background thread — returns immediately
+    let (rx, collect_handle) = collector::collect(&config.files, pool, config.temp_dir.as_deref());
 
     // Build the writer chain: file ← encrypt ← compress ← tar
     let base_writer: Box<dyn FinishableWrite> = Box::new(PassthroughWriter(file));
@@ -60,7 +62,7 @@ pub fn run(
     let compress_writer = compress::wrap_writer(&config.compressor, encrypt_writer)
         .context("Failed to init compressor")?;
 
-    // Tar writes into compress → encrypt → file
+    // Tar consumes entries as they arrive from the collector
     let final_writer = tar::write_tar(rx, compress_writer)
         .map_err(Error::from)
         .context("Tar creation failed")?;
@@ -69,6 +71,8 @@ pub fn run(
     final_writer
         .finish()
         .context("Failed to finalize archive")?;
+
+    let entry_errors = collect_handle.join().expect("collector thread panicked");
 
     Ok((temp_file, entry_errors))
 }

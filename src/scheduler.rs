@@ -8,7 +8,9 @@ use crate::notifications::event::{BackupEvent, DispatchOutcome};
 use crate::pipeline;
 use crate::retention::{self, BackupFile};
 use chrono::{DateTime, Utc};
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 
 static TIME_FORMAT: &str = "%Y-%m-%dT%Hh%Mm%Ss%z";
@@ -70,8 +72,8 @@ pub fn run_once(config: Arc<BackupConfig>, pool: Arc<rayon::ThreadPool>) -> Resu
 /// Executes one backup cycle.
 fn execute_cycle(
     config: &Arc<BackupConfig>,
-    pool: &rayon::ThreadPool,
-    backup_set: &mut HashSet<BackupFile>,
+    pool: &Arc<rayon::ThreadPool>,
+    backup_set: &mut HashMap<Rc<Path>, DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> Result<CycleOutcome> {
     // 1. Dispatch start event
@@ -118,7 +120,7 @@ fn execute_cycle(
         now.format(TIME_FORMAT).to_string().replace('+', "_"),
         config.file_ext(),
     );
-    let final_path = config.out_dir.join(&file_name);
+    let final_path = Rc::from(config.out_dir.join(&file_name));
     temp_file
         .persist(&final_path)
         .map_err(std::io::Error::from)
@@ -128,25 +130,30 @@ fn execute_cycle(
     tracing::info!("Created backup: {:?} ({} bytes)", final_path, file_size);
 
     // 6. Update backup set
-    backup_set.insert(BackupFile {
-        path: final_path.clone(),
-        timestamp: now,
-    });
+    let final_rc: Rc<Path> = Rc::clone(&final_path);
+    backup_set.insert(Rc::clone(&final_rc), now);
 
     // 7. Retention
     if let Some(ref retention_config) = config.retention {
-        let backups: Vec<&BackupFile> = backup_set.iter().collect();
-        let to_delete = retention::get_deletions(&backups, now, retention_config);
+        let backups: Vec<BackupFile> = backup_set
+            .iter()
+            .map(|(p, t)| BackupFile {
+                path: Rc::clone(p),
+                timestamp: *t,
+            })
+            .collect();
+        let backup_refs: Vec<&BackupFile> = backups.iter().collect();
+        let to_delete = retention::get_deletions(&backup_refs, now, retention_config);
         if !to_delete.is_empty() {
             tracing::info!("Retention: removing {} expired backups", to_delete.len());
         }
         for path in &to_delete {
             tracing::info!("Deleting: {:?}", path);
-            backup_set.retain(|b| b.path != *path);
-        }
-        let errors = retention::delete_files(&to_delete);
-        for e in &errors {
-            tracing::error!("{}", e);
+            if let Err(e) = std::fs::remove_file(path.as_ref()) {
+                tracing::error!("Failed to delete {:?}: {}", path, e);
+            } else {
+                backup_set.remove(path.as_ref());
+            }
         }
     }
 
@@ -158,7 +165,7 @@ fn execute_cycle(
             &BackupEvent::NonFatalError {
                 config: config.clone(),
                 timestamp: now,
-                output_file: final_path.clone(),
+                output_file: final_path.to_path_buf(),
                 errors: entry_errors.to_string(),
             },
         );
@@ -167,14 +174,14 @@ fn execute_cycle(
             DispatchOutcome::Skip(e) => return Ok(CycleOutcome::Skipped(e.to_string())),
             DispatchOutcome::Error(e) => return Err(e),
         }
-        CycleOutcome::Completed(final_path)
+        CycleOutcome::Completed(final_path.to_path_buf())
     } else {
         let dispatch = notifications::dispatch_event(
             config,
             &BackupEvent::Success {
                 config: config.clone(),
                 timestamp: now,
-                output_file: final_path.clone(),
+                output_file: final_path.to_path_buf(),
             },
         );
         match dispatch {
@@ -182,7 +189,7 @@ fn execute_cycle(
             DispatchOutcome::Skip(e) => return Ok(CycleOutcome::Skipped(e.to_string())),
             DispatchOutcome::Error(e) => return Err(e),
         }
-        CycleOutcome::Completed(final_path)
+        CycleOutcome::Completed(final_path.to_path_buf())
     };
 
     tracing::info!("Total backups: {}", backup_set.len());
@@ -210,37 +217,45 @@ fn pre_validate(config: &BackupConfig) -> Result<()> {
 }
 
 /// Scans existing backup files in out_dir.
-fn scan_existing_backups(config: &BackupConfig) -> Result<HashSet<BackupFile>> {
-    let mut set = HashSet::new();
+fn scan_existing_backups(config: &BackupConfig) -> Result<HashMap<Rc<Path>, DateTime<Utc>>> {
+    let mut map = HashMap::new();
     let entries = std::fs::read_dir(&config.out_dir).context("Failed to read out_dir")?;
 
     let ext = config.file_ext();
     let prefix = format!("{}.", config.archive_base_name);
 
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!("Failed to read entry in out_dir: {}", e);
+                continue;
+            }
+        };
         let path = entry.path();
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
             if name.starts_with(&prefix) && name.ends_with(&format!(".{}", ext)) {
                 let time_part = &name[prefix.len()..name.len() - ext.len() - 1];
                 let time_str = time_part.replace('_', "+");
                 if let Ok(dt) = DateTime::parse_from_str(&time_str, TIME_FORMAT) {
-                    set.insert(BackupFile {
-                        path: path.clone(),
-                        timestamp: dt.to_utc(),
-                    });
+                    let rc: Rc<Path> = path.into();
+                    map.insert(rc, dt.to_utc());
                 }
             }
         }
     }
-    Ok(set)
+    Ok(map)
 }
 
 /// Computes the initial start time for the cron loop.
-fn compute_initial_start(backup_set: &HashSet<BackupFile>, cron_str: &str) -> DateTime<Utc> {
+fn compute_initial_start(
+    backup_set: &HashMap<Rc<Path>, DateTime<Utc>>,
+    cron_str: &str,
+) -> DateTime<Utc> {
     backup_set
-        .iter()
-        .map(|b| b.timestamp)
+        .values()
         .max()
+        .copied()
         .map(|last| cron_parser::parse(cron_str, &last).unwrap())
         .unwrap_or_else(|| cron_parser::parse(cron_str, &DateTime::UNIX_EPOCH).unwrap())
 }

@@ -3,7 +3,7 @@
 use crate::config::{CommandConfig, EnvInheritMode};
 use crate::error::{CommandError, Result};
 use crate::notifications::event::BackupEvent;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use wait_timeout::ChildExt;
 
@@ -43,47 +43,85 @@ pub fn send_event(config: &CommandConfig, event: &BackupEvent) -> Result<()> {
     if config.stdin_json {
         if let Some(mut stdin) = child.stdin.take() {
             let json = serde_json::to_string(event).map_err(CommandError::from)?;
-            let _ = stdin.write_all(json.as_bytes());
+            if let Err(e) = stdin.write_all(json.as_bytes()) {
+                tracing::warn!("Failed to write event to command stdin: {}", e);
+            }
         }
     }
+    // Close stdin so child can proceed
     drop(child.stdin.take());
 
-    let timed_out = matches!(child.wait_timeout(config.timeout), Ok(None));
-    if timed_out {
-        let _ = child.kill();
-    }
+    // Read stdout/stderr concurrently (bounded), then wait for exit.
+    // Pipes EOF when child exits, so reads complete naturally.
+    // Timeout covers the entire operation.
+    let max = config.max_output_size as u64;
+    let timeout = config.timeout;
 
-    let output = child.wait_with_output().map_err(|e| CommandError::Wait {
-        command: cmd_str.clone(),
-        source: e,
-    })?;
+    let stderr_handle = std::thread::spawn({
+        let mut stderr_pipe = child.stderr.take();
+        move || {
+            let mut buf = Vec::new();
+            if let Some(ref mut s) = stderr_pipe {
+                if let Err(e) = s.take(max).read_to_end(&mut buf) {
+                    tracing::warn!("Failed to read command stderr: {}", e);
+                }
+            }
+            buf
+        }
+    });
 
-    let stdout =
-        String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(config.max_output_size)]);
-    let stderr =
-        String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(config.max_output_size)]);
-    let stdout = stdout.trim_end().to_string();
-    let stderr = stderr.trim_end().to_string();
+    let stdout_handle = std::thread::spawn({
+        let mut stdout_pipe = child.stdout.take();
+        move || {
+            let mut buf = Vec::new();
+            if let Some(ref mut s) = stdout_pipe {
+                if let Err(e) = s.take(max).read_to_end(&mut buf) {
+                    tracing::warn!("Failed to read command stdout: {}", e);
+                }
+            }
+            buf
+        }
+    });
+
+    // Wait with timeout — if child doesn't exit within timeout, kill it
+    let status = match child.wait_timeout(timeout) {
+        Ok(Some(status)) => status,
+        Ok(None) => {
+            if let Err(e) = child.kill() {
+                tracing::error!("Failed to kill timed-out command {}: {}", cmd_str, e);
+            }
+            return Err(CommandError::Timeout {
+                command: cmd_str,
+                timeout,
+            }
+            .into());
+        }
+        Err(e) => {
+            return Err(CommandError::Wait {
+                command: cmd_str,
+                source: e,
+            }
+            .into());
+        }
+    };
+
+    let stdout_buf = stdout_handle.join().unwrap_or_default();
+    let stderr_buf = stderr_handle.join().unwrap_or_default();
+
+    let stdout = String::from_utf8_lossy(&stdout_buf).trim_end().to_string();
+    let stderr = String::from_utf8_lossy(&stderr_buf).trim_end().to_string();
 
     if !stdout.is_empty() {
-        tracing::debug!("Command {} stdout: {}", cmd_str, stdout);
+        tracing::debug!("Command {} stdout: {:?}", cmd_str, stdout);
     }
     if !stderr.is_empty() {
-        tracing::debug!("Command {} stderr: {}", cmd_str, stderr);
+        tracing::debug!("Command {} stderr: {:?}", cmd_str, stderr);
     }
 
-    if timed_out {
-        return Err(CommandError::Timeout {
-            command: cmd_str,
-            timeout: config.timeout,
-        }
-        .into());
-    }
-
-    if !output.status.success() {
+    if !status.success() {
         return Err(CommandError::NonZeroExit {
             command: cmd_str,
-            status: output.status.to_string(),
+            status: status.to_string(),
             stdout,
             stderr,
         }

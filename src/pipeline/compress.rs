@@ -2,7 +2,7 @@
 
 use crate::error::CompressError;
 use crate::pipeline::FinishableWrite;
-use liblzma::stream::{LzmaOptions, MtStreamBuilder, Stream};
+use liblzma::stream::{MtStreamBuilder, Stream};
 use liblzma::write::XzEncoder;
 use std::io::Write;
 
@@ -46,10 +46,10 @@ pub fn wrap_writer(
                 MtStreamBuilder::new()
                     .preset(*level)
                     .threads(threads as u32)
+                    .check(liblzma::stream::Check::Crc64)
                     .encoder()?
             } else {
-                let opts = LzmaOptions::new_preset(*level)?;
-                Stream::new_lzma_encoder(&opts)?
+                Stream::new_easy_encoder(*level, liblzma::stream::Check::Crc64)?
             };
 
             Ok(Box::new(FinishableXzEncoder(Some(XzEncoder::new_stream(

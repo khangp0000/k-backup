@@ -6,40 +6,54 @@ use crate::pipeline::entry::ArchiveEntry;
 use crate::pipeline::entry_errors::{EntryError, EntryErrors};
 use crate::pipeline::sources;
 use rayon::prelude::*;
+use std::ops::ControlFlow;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
-/// Runs the entry collector on the rayon pool.
-/// Returns (entry_receiver, entry_errors) — receiver streams entries to tar writer.
+/// Spawns entry collection on a background thread.
+/// Returns (entry_receiver, join_handle) — receiver streams entries to tar writer,
+/// join handle resolves to entry errors when collection completes.
 pub fn collect(
     configs: &[ArchiveEntryConfig],
-    pool: &rayon::ThreadPool,
+    pool: &Arc<rayon::ThreadPool>,
     temp_dir: Option<&std::path::Path>,
-) -> (Receiver<ArchiveEntry>, EntryErrors) {
+) -> (Receiver<ArchiveEntry>, JoinHandle<EntryErrors>) {
     let channel_size = pool.current_num_threads().max(4);
     let (tx, rx) = sync_channel(channel_size);
 
-    // Wrap each config in Arc for cheap cloning into errors
     let arced: Vec<Arc<ArchiveEntryConfig>> = configs.iter().map(|c| Arc::new(c.clone())).collect();
     let temp_dir_owned: Option<std::path::PathBuf> = temp_dir.map(|p| p.to_path_buf());
+    let pool = Arc::clone(pool);
 
-    let entry_errors = pool.install(|| {
-        arced
-            .par_iter()
-            .fold(EntryErrors::new, |mut errors, config| {
-                collect_one(config, &tx, &mut errors, temp_dir_owned.as_deref());
-                errors
-            })
-            .reduce(EntryErrors::new, |mut a, b| {
-                a.merge(b);
-                a
-            })
+    let handle = std::thread::spawn(move || {
+        let errors = pool.install(|| collect_all(&arced, &tx, temp_dir_owned.as_deref()));
+        drop(tx);
+        errors
     });
 
-    // Drop sender so receiver knows when all entries are sent
-    drop(tx);
+    (rx, handle)
+}
 
-    (rx, entry_errors)
+/// Core collection logic. Processes all configs, sending entries through tx.
+/// Short-circuits if the channel closes.
+fn collect_all(
+    configs: &[Arc<ArchiveEntryConfig>],
+    tx: &SyncSender<ArchiveEntry>,
+    temp_dir: Option<&std::path::Path>,
+) -> EntryErrors {
+    let result = configs
+        .par_iter()
+        .try_fold(EntryErrors::new, |mut errors, config| {
+            collect_one(config, tx, &mut errors, temp_dir)
+        })
+        .try_reduce(EntryErrors::new, |mut a, b| {
+            a.merge(b);
+            ControlFlow::Continue(a)
+        });
+    match result {
+        ControlFlow::Continue(errors) | ControlFlow::Break(errors) => errors,
+    }
 }
 
 fn collect_one(
@@ -47,38 +61,16 @@ fn collect_one(
     tx: &SyncSender<ArchiveEntry>,
     errors: &mut EntryErrors,
     temp_dir: Option<&std::path::Path>,
-) {
+) -> ControlFlow<EntryErrors, EntryErrors> {
     match config.as_ref() {
         ArchiveEntryConfig::Sqlite(c) => match sources::sqlite::create_entry(c, temp_dir) {
             Ok(entry) => {
-                let _ = tx.send(entry);
-            }
-            Err(e) => errors.push(EntryError {
-                source: config.clone(),
-                error: Error::from(e),
-            }),
-        },
-        ArchiveEntryConfig::Base64(c) => match sources::base64::create_entry(c) {
-            Ok(entry) => {
-                let _ = tx.send(entry);
-            }
-            Err(e) => errors.push(EntryError {
-                source: config.clone(),
-                error: Error::from(e),
-            }),
-        },
-        ArchiveEntryConfig::Glob(c) => match sources::glob::iter_entries(c) {
-            Ok(results) => {
-                for result in results {
-                    match result {
-                        Ok(entry) => {
-                            let _ = tx.send(entry);
-                        }
-                        Err(e) => errors.push(EntryError {
-                            source: config.clone(),
-                            error: Error::from(e),
-                        }),
-                    }
+                if let Err(_) = tx.send(entry) {
+                    errors.push(EntryError {
+                        source: config.clone(),
+                        error: Error::from(std::io::Error::other("archive writer closed")),
+                    });
+                    return ControlFlow::Break(std::mem::take(errors));
                 }
             }
             Err(e) => errors.push(EntryError {
@@ -86,5 +78,71 @@ fn collect_one(
                 error: Error::from(e),
             }),
         },
+        ArchiveEntryConfig::Base64(c) => {
+            let entry = sources::base64::create_entry(c);
+            if let Err(_) = tx.send(entry) {
+                errors.push(EntryError {
+                    source: config.clone(),
+                    error: Error::from(std::io::Error::other("archive writer closed")),
+                });
+                return ControlFlow::Break(std::mem::take(errors));
+            }
+        }
+        ArchiveEntryConfig::Glob(c) => {
+            let errs = match sources::glob::send_entries(c, tx) {
+                std::ops::ControlFlow::Continue(errs) => errs,
+                std::ops::ControlFlow::Break(errs) => {
+                    for e in errs {
+                        errors.push(EntryError {
+                            source: config.clone(),
+                            error: Error::from(e),
+                        });
+                    }
+                    errors.push(EntryError {
+                        source: config.clone(),
+                        error: Error::from(std::io::Error::other("archive writer closed")),
+                    });
+                    return ControlFlow::Break(std::mem::take(errors));
+                }
+            };
+            for e in errs {
+                errors.push(EntryError {
+                    source: config.clone(),
+                    error: Error::from(e),
+                });
+            }
+        }
+    }
+    ControlFlow::Continue(std::mem::take(errors))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ArchiveEntryConfig, Base64SourceConfig};
+
+    #[test]
+    fn short_circuits_when_channel_closed() {
+        let configs: Vec<Arc<ArchiveEntryConfig>> = (0..100)
+            .map(|i| {
+                Arc::new(ArchiveEntryConfig::Base64(Base64SourceConfig {
+                    content: crate::config::Base64Bytes::new(b"a".to_vec()),
+                    dst: format!("{}.txt", i).into(),
+                }))
+            })
+            .collect();
+
+        // Create channel and immediately drop receiver — channel is closed
+        let (tx, _rx) = std::sync::mpsc::sync_channel(4);
+        drop(_rx);
+
+        let errors = collect_all(&configs, &tx, None);
+
+        // Should have exactly 1 error: "archive writer closed"
+        assert_eq!(errors.errors.len(), 1);
+        assert!(errors.errors[0]
+            .error
+            .to_string()
+            .contains("archive writer closed"));
     }
 }

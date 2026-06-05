@@ -1,49 +1,44 @@
 //! Base64-encoded content source.
 
 use crate::config::Base64SourceConfig;
-use crate::error::ArchiveError;
 use crate::pipeline::entry::{ArchiveEntry, ArchiveEntryKind};
-use base64::Engine;
+use std::sync::Arc;
 
-/// Creates an archive entry from base64-decoded content.
-pub fn create_entry(
-    config: &Base64SourceConfig,
-) -> std::result::Result<ArchiveEntry, ArchiveError> {
-    let data = base64::engine::general_purpose::STANDARD
-        .decode(&config.content)
-        .map_err(ArchiveError::from)?;
-
-    Ok(ArchiveEntry {
+/// Creates an archive entry from pre-decoded base64 content.
+pub fn create_entry(config: &Base64SourceConfig) -> ArchiveEntry {
+    ArchiveEntry {
         dst: config.dst.clone(),
-        kind: ArchiveEntryKind::Memory(data),
-    })
+        kind: ArchiveEntryKind::Memory(Arc::clone(config.content.arc())),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Base64Bytes;
     use std::path::PathBuf;
 
     #[test]
-    fn create_entry_valid_base64() {
+    fn create_entry_produces_memory_kind() {
         let config = Base64SourceConfig {
-            content: "SGVsbG8=".into(), // "Hello"
+            content: Base64Bytes::new(b"Hello".to_vec()),
             dst: "msg.txt".into(),
         };
-        let entry = create_entry(&config).unwrap();
+        let entry = create_entry(&config);
         assert_eq!(entry.dst, PathBuf::from("msg.txt"));
         match entry.kind {
-            ArchiveEntryKind::Memory(data) => assert_eq!(data, b"Hello"),
+            ArchiveEntryKind::Memory(data) => assert_eq!(&*data, b"Hello"),
             _ => panic!("expected Memory kind"),
         }
     }
 
     #[test]
-    fn create_entry_invalid_base64() {
-        let config = Base64SourceConfig {
-            content: "!!!invalid!!!".into(),
-            dst: "bad.txt".into(),
-        };
-        assert!(create_entry(&config).is_err());
+    fn invalid_base64_rejected_at_deserialization() {
+        let yaml = r#"
+content: "!!!invalid!!!"
+dst: bad.txt
+"#;
+        let result: Result<Base64SourceConfig, _> = serde_saphyr::from_str(yaml);
+        assert!(result.is_err());
     }
 }
