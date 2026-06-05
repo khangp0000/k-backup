@@ -252,8 +252,8 @@ mod tests {
     #[test]
     fn multiple_displays_numbered_list() {
         let errors = vec![
-            Error::from(io::Error::new(io::ErrorKind::Other, "err1")),
-            Error::from(io::Error::new(io::ErrorKind::Other, "err2")),
+            Error::from(io::Error::other("err1")),
+            Error::from(io::Error::other("err2")),
         ];
         let multi = Error::multiple(errors);
         let display = multi.to_string();
@@ -266,8 +266,7 @@ mod tests {
 
     #[test]
     fn context_trait_on_result() {
-        let result: std::result::Result<(), io::Error> =
-            Err(io::Error::new(io::ErrorKind::Other, "inner"));
+        let result: std::result::Result<(), io::Error> = Err(io::Error::other("inner"));
         let wrapped = result.context("outer");
         let err = wrapped.unwrap_err();
         assert!(err.to_string().contains("outer"));
