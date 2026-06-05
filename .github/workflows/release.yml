@@ -52,6 +52,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
 
       - name: Build release binary (x86_64)
         run: cargo build --release --locked --features fully-static
@@ -73,6 +76,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
 
       - name: Build release binary (aarch64)
         run: cargo build --release --locked --features fully-static
