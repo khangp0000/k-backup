@@ -121,10 +121,19 @@ fn execute_cycle(
         config.file_ext(),
     );
     let final_path = Rc::from(config.out_dir.join(&file_name));
-    temp_file
-        .persist(&final_path)
-        .map_err(std::io::Error::from)
-        .context("Failed to persist archive")?;
+    match temp_file.persist_noclobber(&final_path) {
+        Ok(_) => {}
+        Err(e) => {
+            if final_path.exists() {
+                return Err(Error::from(std::io::Error::from(e))
+                    .context("Failed to persist archive: target already exists"));
+            }
+            tracing::info!("Rename failed ({}), falling back to copy", e.error);
+            std::fs::copy(e.file.path(), &final_path)
+                .map_err(Error::from)
+                .context("Failed to persist archive (copy fallback)")?;
+        }
+    }
 
     let file_size = std::fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0);
     tracing::info!("Created backup: {:?} ({} bytes)", final_path, file_size);

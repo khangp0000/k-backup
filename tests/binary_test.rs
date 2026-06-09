@@ -795,3 +795,46 @@ encryptor:
     assert!(middle.contains('h'));
     assert!(middle.contains('m'));
 }
+
+#[test]
+fn test_cross_device_persist_fallback() {
+    use std::os::linux::fs::MetadataExt;
+
+    let shm = Path::new("/dev/shm");
+    if !shm.exists() {
+        eprintln!("Skipping: /dev/shm not available");
+        return;
+    }
+
+    let target_dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let shm_dev = fs::metadata(shm).unwrap().st_dev();
+    let target_dev = fs::metadata(target_dir).unwrap().st_dev();
+    if shm_dev == target_dev {
+        eprintln!("Skipping: /dev/shm and target dir are same filesystem");
+        return;
+    }
+
+    let tmp = TempDir::new_in(target_dir).unwrap();
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let yaml = format!(
+        "archive_base_name: xdev\nout_dir: {}\ntemp_dir: /dev/shm\nfiles:\n  - type: base64\n    content: \"dGVzdA==\"\n    dst: test.txt\ncompressor:\n  compressor_type: none\nencryptor:\n  encryptor_type: none\n",
+        out_dir.display()
+    );
+    let config = write_config(tmp.path(), &yaml);
+
+    cmd()
+        .arg("--config")
+        .arg(&config)
+        .arg("--once")
+        .assert()
+        .success();
+
+    let entries: Vec<_> = fs::read_dir(&out_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].file_name().to_string_lossy().starts_with("xdev."));
+}
