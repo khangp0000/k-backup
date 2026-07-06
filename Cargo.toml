@@ -24,7 +24,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive", "rc"] }
-serde-saphyr = "0.0.28"
+serde-saphyr = "0.0.29"
 serde_json = "1.0"
 base64 = "0.22"
 
