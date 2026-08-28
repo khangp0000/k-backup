@@ -1,0 +1,47 @@
+name: Build (glibc matrix)
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    strategy:
+      fail-fast: false
+      matrix:
+        glibc: ["2.17", "2.28", "2.34", "2.39", "2.43", "2.50", ""]
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    name: "glibc ${{ matrix.glibc || 'default' }} (${{ matrix.target }})"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm rustup cargo-zigbuild
+
+      - name: Setup Rust
+        run: rustup default stable && rustup target add ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /root/.cargo/registry
+            /root/.cargo/git
+            target
+          key: zigbuild-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: zigbuild-${{ matrix.target }}-
+
+      - name: Build
+        run: |
+          TARGET="${{ matrix.target }}"
+          if [ -n "${{ matrix.glibc }}" ]; then
+            TARGET="${TARGET}.${{ matrix.glibc }}"
+          fi
+          cargo zigbuild --locked --target "$TARGET" --features fully-static
+
+      - name: Check binary architecture
+        run: file target/${{ matrix.target }}/debug/k_backup
+
+      - name: Check glibc version requirements
+        run: objdump -T target/${{ matrix.target }}/debug/k_backup | grep -oP 'GLIBC_\S+' | sort -uV
