@@ -45,7 +45,7 @@ walkdir = "2.5"
 
 # Time parsing
 humantime-serde = "1.1"
-cron-parser = "0.11"
+cron-parser = "0.12"
 
 # Error handling
 thiserror = "2.0"
